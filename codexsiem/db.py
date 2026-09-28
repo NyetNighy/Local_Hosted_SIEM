@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from codexsiem.config import DB_PATH
 
@@ -32,7 +32,11 @@ def init_db() -> None:
                 client_id TEXT NOT NULL,
                 client_secret TEXT NOT NULL,
                 client_secret_ref TEXT,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                last_sync_at TEXT,
+                last_sync_status TEXT,
+                last_sync_error TEXT,
+                last_synced_event_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS signins (
@@ -103,6 +107,9 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE tenants ADD COLUMN customer_group TEXT NOT NULL DEFAULT ''"
             )
+        for col in ("last_sync_at", "last_sync_status", "last_sync_error", "last_synced_event_at"):
+            if col not in cols:
+                conn.execute(f"ALTER TABLE tenants ADD COLUMN {col} TEXT")
 
         signins_cols = [row[1] for row in conn.execute("PRAGMA table_info(signins)").fetchall()]
         if "location_country" not in signins_cols:
@@ -126,6 +133,107 @@ def init_db() -> None:
 def has_users() -> bool:
     with closing(db_conn()) as conn:
         return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] > 0
+
+
+def get_tenant_watermark(tenant_id: str) -> Optional[str]:
+    """Return last successfully ingested sign-in event timestamp for a tenant."""
+    with closing(db_conn()) as conn:
+        row = conn.execute(
+            "SELECT last_synced_event_at FROM tenants WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if row and row["last_synced_event_at"]:
+            return str(row["last_synced_event_at"])
+        # Fallback: max signin created_at already stored
+        row2 = conn.execute(
+            "SELECT MAX(created_at) AS m FROM signins WHERE tenant_id = ?",
+            (tenant_id,),
+        ).fetchone()
+        if row2 and row2["m"]:
+            return str(row2["m"])
+    return None
+
+
+def update_tenant_sync(
+    tenant_id: str,
+    *,
+    status: str,
+    error: str = "",
+    watermark: Optional[str] = None,
+) -> None:
+    with closing(db_conn()) as conn:
+        if watermark:
+            conn.execute(
+                """
+                UPDATE tenants
+                SET last_sync_at = ?, last_sync_status = ?, last_sync_error = ?,
+                    last_synced_event_at = COALESCE(?, last_synced_event_at)
+                WHERE tenant_id = ?
+                """,
+                (utc_now_iso(), status, error or None, watermark, tenant_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE tenants
+                SET last_sync_at = ?, last_sync_status = ?, last_sync_error = ?
+                WHERE tenant_id = ?
+                """,
+                (utc_now_iso(), status, error or None, tenant_id),
+            )
+        conn.commit()
+
+
+def sync_status_summary() -> Dict[str, Any]:
+    """Aggregate last-sync info for health and dashboard."""
+    with closing(db_conn()) as conn:
+        rows = conn.execute(
+            """
+            SELECT name, customer_name, tenant_id,
+                   last_sync_at, last_sync_status, last_sync_error, last_synced_event_at
+            FROM tenants
+            ORDER BY customer_name ASC, name ASC
+            """
+        ).fetchall()
+    tenants: List[Dict[str, Any]] = []
+    oldest: Optional[str] = None
+    newest: Optional[str] = None
+    ok = 0
+    failed = 0
+    never = 0
+    for r in rows:
+        item = {
+            "name": r["name"],
+            "customer_name": r["customer_name"],
+            "tenant_id": r["tenant_id"],
+            "last_sync_at": r["last_sync_at"],
+            "last_sync_status": r["last_sync_status"],
+            "last_sync_error": r["last_sync_error"],
+            "last_synced_event_at": r["last_synced_event_at"],
+        }
+        tenants.append(item)
+        ts = r["last_sync_at"]
+        if not ts:
+            never += 1
+        else:
+            if oldest is None or str(ts) < oldest:
+                oldest = str(ts)
+            if newest is None or str(ts) > newest:
+                newest = str(ts)
+            st = (r["last_sync_status"] or "").lower()
+            if st == "ok":
+                ok += 1
+            elif st in {"error", "failed"}:
+                failed += 1
+    return {
+        "tenant_count": len(tenants),
+        "ok": ok,
+        "failed": failed,
+        "never_synced": never,
+        "oldest_sync_at": oldest,
+        "newest_sync_at": newest,
+        "tenants": tenants,
+    }
 
 
 def audit_log(

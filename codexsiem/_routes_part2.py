@@ -202,6 +202,9 @@ async def dashboard(
             ).fetchall()
         ]
 
+    from codexsiem.db import sync_status_summary
+
+    sync_info = sync_status_summary()
     role = request.session.get("role", "")
     export_qs = httpx.QueryParams({k: v for k, v in cleaned.items() if v})
     try:
@@ -226,6 +229,7 @@ async def dashboard(
                 "can_manage": user_can_manage(role),
                 "is_admin": user_is_admin(role),
                 "filter_user": cleaned["user"],
+                "sync_info": sync_info,
             },
         )
     except Exception:
@@ -325,7 +329,11 @@ async def tenant_page(request: Request) -> HTMLResponse:
                     WHEN COALESCE(TRIM(client_secret), '') <> '' AND client_secret <> ? THEN 'Stored in DB'
                     ELSE 'Not configured'
                 END AS secret_source,
-                created_at
+                created_at,
+                last_sync_at,
+                last_sync_status,
+                last_sync_error,
+                last_synced_event_at
             FROM tenants
             ORDER BY customer_group ASC, customer_name ASC, name ASC
             """,

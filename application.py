@@ -29,6 +29,7 @@ from startup_checks import run_startup_template_self_check
 from codexsiem.config import (
     ALLOWED_ROLES,
     APP_TITLE,
+    DETECTION_RULES_PATH,
     GITHUB_BRANCH,
     GITHUB_REPO,
     ROLE_ADMIN,
@@ -46,9 +47,10 @@ from codexsiem.config import (
     validate_runtime_config,
 )
 from codexsiem.db import audit_log, db_conn, has_users, init_db, utc_now_iso
-from codexsiem.detection import add_impossible_travel_reason, alert_reasons, severity_for_reason
+from codexsiem.detection import evaluate_alerts
 from codexsiem.graph import fetch_signins, graph_token
-from codexsiem.notifications import send_alert_email, send_openclawai_alert
+from codexsiem.notifications import notify_alert, send_openclawai_alert
+from codexsiem.rules_engine import rules_status
 
 LOGGER = logging.getLogger(__name__)
 
@@ -181,12 +183,18 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
     ingested = 0
     with closing(db_conn()) as conn:
         customer_row = conn.execute(
-            "SELECT customer_name FROM tenants WHERE tenant_id = ?", (tenant_id,)
+            "SELECT customer_name, customer_group FROM tenants WHERE tenant_id = ?",
+            (tenant_id,),
         ).fetchone()
         customer_name = (
             customer_row["customer_name"]
             if customer_row and customer_row["customer_name"]
             else "Unassigned"
+        )
+        customer_group = (
+            customer_row["customer_group"]
+            if customer_row and customer_row["customer_group"]
+            else ""
         )
         for signin in signins:
             graph_id = signin.get("id")
@@ -221,10 +229,11 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                 ingested += 1
             except sqlite3.IntegrityError:
                 continue
-            reasons = alert_reasons(signin)
-            reasons.extend(add_impossible_travel_reason(conn, tenant_id, signin))
-            for reason in reasons:
-                severity = severity_for_reason(reason)
+
+            alerts = evaluate_alerts(signin, tenant_id, conn)
+            for hit in alerts:
+                severity = hit.get("severity") or "medium"
+                reason = hit.get("reason") or hit.get("name") or "alert"
                 created_at = utc_now_iso()
                 try:
                     conn.execute(
@@ -240,9 +249,12 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                     "source": "codexsiem",
                     "tenant_id": tenant_id,
                     "customer_name": customer_name,
+                    "customer_group": customer_group,
                     "signins_graph_id": graph_id,
                     "severity": severity,
                     "reason": reason,
+                    "rule_id": hit.get("rule_id") or "",
+                    "rule_group": hit.get("group") or "",
                     "created_at": created_at,
                     "user_principal_name": signin.get("userPrincipalName"),
                     "ip_address": signin.get("ipAddress"),
@@ -251,18 +263,8 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                     "status": signin.get("status") or {},
                 }
                 send_openclawai_alert(payload)
-                send_alert_email(
-                    subject=f"[CodexSIEM] {severity.upper()} alert for {tenant_id}",
-                    body=(
-                        f"Customer: {customer_name}\n"
-                        f"Tenant: {tenant_id}\n"
-                        f"User: {signin.get('userPrincipalName')}\n"
-                        f"IP: {signin.get('ipAddress')}\n"
-                        f"App: {signin.get('appDisplayName')}\n"
-                        f"Reason: {reason}\n"
-                        f"Time: {created_at}"
-                    ),
-                )
+                if hit.get("notify", True):
+                    notify_alert(payload)
         conn.commit()
     return ingested
 
@@ -293,11 +295,20 @@ async def startup() -> None:
     startup_template_self_check()
     init_db()
     bootstrap_admin_user()
+    status = rules_status(DETECTION_RULES_PATH)
+    if status.get("ok"):
+        LOGGER.info(
+            "Detection rules ready: %s rules from %s",
+            status.get("rule_count"),
+            status.get("path"),
+        )
+    else:
+        LOGGER.warning("Detection rules not loaded: %s", status.get("error"))
 
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok"})
+    return JSONResponse({"status": "ok", "rules": rules_status()})
 
 
 @app.get("/ready")

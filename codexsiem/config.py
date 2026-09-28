@@ -8,6 +8,10 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
+RULES_DIR = BASE_DIR / "rules"
+DETECTION_RULES_PATH = Path(
+    os.getenv("DETECTION_RULES_PATH", str(RULES_DIR / "detections.yaml"))
+)
 
 DB_PATH = os.getenv("SIEM_DB_PATH", "siem.db")
 SYNC_MINUTES = int(os.getenv("SIEM_SYNC_MINUTES", "15"))

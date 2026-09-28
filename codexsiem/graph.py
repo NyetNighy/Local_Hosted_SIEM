@@ -23,10 +23,33 @@ async def graph_token(tenant_id: str, client_id: str, client_secret: str) -> str
         return response.json()["access_token"]
 
 
-async def fetch_signins(token: str, lookback_minutes: int = SYNC_MINUTES) -> List[Dict[str, Any]]:
-    since = (datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+def _normalize_since(watermark: Optional[str], lookback_minutes: int) -> str:
+    """Pick the later of (now - lookback) and watermark, formatted for Graph filter."""
+    floor = datetime.now(tz=timezone.utc) - timedelta(minutes=lookback_minutes)
+    since_dt = floor
+    if watermark:
+        s = str(watermark).strip()
+        try:
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            wm = datetime.fromisoformat(s)
+            if wm.tzinfo is None:
+                wm = wm.replace(tzinfo=timezone.utc)
+            # Add 1 second so we do not re-fetch the last event
+            wm = wm + timedelta(seconds=1)
+            if wm > since_dt:
+                since_dt = wm
+        except ValueError:
+            pass
+    return since_dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+async def fetch_signins(
+    token: str,
+    lookback_minutes: int = SYNC_MINUTES,
+    since_watermark: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    since = _normalize_since(since_watermark, lookback_minutes)
     url = "https://graph.microsoft.com/v1.0/auditLogs/signIns"
     params = {"$filter": f"createdDateTime ge {since}", "$top": "100"}
     headers = {"Authorization": f"Bearer {token}"}

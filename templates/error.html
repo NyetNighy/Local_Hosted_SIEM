@@ -1,9 +1,17 @@
-<!doctype html>
-<html lang="en">
-<head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>Error</title></head>
-<body style="font-family:Arial,sans-serif;max-width:700px;margin:40px auto;">
-  <h1>Internal Server Error</h1>
-  <p>{{ message }}</p>
-  <p><a href="/">Back to Dashboard</a></p>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Error · CodexSIEM{% endblock %}
+{% block body %}
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="brand-mark">CS</div>
+      <div>
+        <h1>Something went wrong</h1>
+        <p class="subtitle">Internal server error</p>
+      </div>
+    </div>
+    <p class="lead">{{ message }}</p>
+    <a class="btn primary" href="/">Back to dashboard</a>
+  </div>
+</div>
+{% endblock %}

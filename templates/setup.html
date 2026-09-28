@@ -1,22 +1,32 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Initial Admin Setup</title>
-</head>
-<body style="font-family:Arial,sans-serif;max-width:500px;margin:40px auto;">
-  <h1>First Startup Setup</h1>
-  <p>Create the initial <strong>Admin</strong> account password.</p>
-  {% if error %}<p style="color:#b00020;"><strong>{{ error }}</strong></p>{% endif %}
-  <form method="post" action="/setup" style="display:grid;gap:10px;">
-    <label>Username</label>
-    <input value="Admin" disabled />
-    <label>Password</label>
-    <input name="password" type="password" placeholder="Enter admin password" required />
-    <label>Confirm Password</label>
-    <input name="confirm_password" type="password" placeholder="Confirm admin password" required />
-    <button type="submit">Create Admin Account</button>
-  </form>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Initial setup · CodexSIEM{% endblock %}
+{% block body %}
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-brand">
+      <div class="brand-mark">CS</div>
+      <div>
+        <h1>First-run setup</h1>
+        <p class="subtitle">Create the initial Admin account</p>
+      </div>
+    </div>
+    <p class="lead">This account will have full control over tenants, users, and audit logs.</p>
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    <form method="post" action="/setup">
+      <div class="field">
+        <label>Username</label>
+        <input value="Admin" disabled />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" placeholder="Choose a strong password" required />
+      </div>
+      <div class="field">
+        <label for="confirm_password">Confirm password</label>
+        <input id="confirm_password" name="confirm_password" type="password" placeholder="Confirm password" required />
+      </div>
+      <button class="btn primary" type="submit">Create Admin account</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

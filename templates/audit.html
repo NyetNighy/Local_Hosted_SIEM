@@ -1,77 +1,46 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Security Audit Logs</title>
-  <style>
-    :root {
-      --bg: #0b1020;
-      --panel: #121a2f;
-      --panel-soft: #16213d;
-      --text: #e9eefc;
-      --muted: #9fb0d7;
-      --line: #253459;
-      --accent: #4f7cff;
-      --accent-2: #18c7a1;
-      --danger: #ff6b6b;
-      --warn: #ffb347;
-      --shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; color: var(--text); background: var(--bg); min-height: 100vh; padding: 28px; }
-    .container { max-width: 1320px; margin: 0 auto; }
-    .topbar { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 18px; }
-    .title-wrap h1 { margin: 0; font-size: 30px; }
-    .subtitle { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-    .controls { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
-    .btn { border: 1px solid transparent; background: #1d2b50; color: var(--text); padding: 10px 13px; border-radius: 10px; text-decoration: none; cursor: pointer; font-weight: 600; font-size: 13px; }
-    .btn.subtle { border-color: var(--line); }
-    .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-    table { width: 100%; border-collapse: collapse; }
-    thead { background: var(--panel-soft); }
-    th, td { padding: 11px 10px; border-bottom: 1px solid var(--line); font-size: 13px; text-align: left; }
-    tbody tr:hover { background: #1a2540; }
-    code { font-size: 11px; color: var(--muted); }
-    td:last-child code { display: block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="topbar">
-      <div class="title-wrap">
-        <h1>Microsoft 365 Multi-Tenant SIEM</h1>
-        <p class="subtitle">Signed in as <strong>{{ user }}</strong> ({{ role }})</p>
+{% extends "base.html" %}
+{% block title %}Audit · CodexSIEM{% endblock %}
+{% block body %}
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">CS</div>
+      <div>
+        <h1>Audit logs</h1>
+        <p class="subtitle">Signed in as <strong>{{ user }}</strong> · {{ role }}</p>
       </div>
-      <form method="post" action="/logout"><button class="btn subtle" type="submit">Logout</button></form>
     </div>
+    <nav class="nav">
+      <a class="btn ghost" href="/">Dashboard</a>
+      <form method="post" action="/logout" style="margin:0"><button class="btn ghost" type="submit">Logout</button></form>
+    </nav>
+  </header>
 
-    <section class="controls">
-      <a class="btn subtle" href="/">← Back to Dashboard</a>
-      <a class="btn subtle" href="/export/audit.csv">Export CSV</a>
-    </section>
-
-    <section class="table-wrap">
-      <table>
-        <thead>
-          <tr><th>Time</th><th>Actor</th><th>Role</th><th>Action</th><th>Target</th><th>Outcome</th><th>Source IP</th><th>Details</th></tr>
-        </thead>
-        <tbody>
-          {% for r in logs %}
-          <tr>
-            <td>{{ r['event_time'] }}</td>
-            <td>{{ r['actor'] }}</td>
-            <td>{{ r['actor_role'] }}</td>
-            <td>{{ r['action'] }}</td>
-            <td>{{ r['target'] }}</td>
-            <td>{{ r['outcome'] }}</td>
-            <td>{{ r['source_ip'] }}</td>
-            <td><code>{{ r['details'] }}</code></td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
-  </div>
-</body>
-</html>
+  <section class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th><th>Actor</th><th>Role</th><th>Action</th>
+          <th>Target</th><th>Outcome</th><th>Source IP</th><th>Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in logs %}
+        <tr>
+          <td>{{ r['event_time'] }}</td>
+          <td>{{ r['actor'] }}</td>
+          <td>{{ r['actor_role'] }}</td>
+          <td>{{ r['action'] }}</td>
+          <td>{{ r['target'] }}</td>
+          <td><span class="badge badge-{{ r['outcome'] }}">{{ r['outcome'] }}</span></td>
+          <td>{{ r['source_ip'] }}</td>
+          <td><code title="{{ r['details'] }}">{{ r['details'] }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td class="empty" colspan="8">No audit events yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

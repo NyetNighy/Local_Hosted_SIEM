@@ -21,6 +21,7 @@
     <div class="nav-section">Admin</div>
     <a class="nav-link" href="/users"><span class="ico">◉</span> Users</a>
     <a class="nav-link" href="/audit"><span class="ico">▦</span> Audit</a>
+    <a class="nav-link" href="/settings/email"><span class="ico">✉</span> Email</a>
     {% endif %}
     <div class="sidebar-foot">
       <div class="user-chip">
@@ -51,14 +52,64 @@
     {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
     {% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
 
-    <section class="card-grid">
+    <section class="card-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr));">
       <article class="stat-card"><div class="label">Tenants</div><div class="value">{{ tenant_count }}</div></article>
       <article class="stat-card"><div class="label">Sign-ins</div><div class="value">{{ signin_count }}</div></article>
       <article class="stat-card"><div class="label">Alerts</div><div class="value">{{ alert_count }}</div></article>
+      <article class="stat-card">
+        <div class="label">Last sync</div>
+        <div class="value" style="font-size: 0.95rem; margin-top: 6px;">
+          {% if sync_info and sync_info.newest_sync_at %}
+            {{ sync_info.newest_sync_at[:19] }}
+          {% else %}
+            Never
+          {% endif %}
+        </div>
+        <div class="hint" style="margin-top: 4px;">
+          {% if sync_info %}
+            ok {{ sync_info.ok }} · failed {{ sync_info.failed }} · never {{ sync_info.never_synced }}
+          {% endif %}
+        </div>
+      </article>
     </section>
 
+    {% if sync_info and sync_info.tenants and can_manage %}
     <section class="panel">
-      <h3 class="panel-title">Search &amp; filters</h3>
+      <h3 class="panel-title">Tenant sync status</h3>
+      <div class="table-wrap" style="max-height: 220px;">
+        <table>
+          <thead>
+            <tr>
+              <th>Customer</th><th>Connection</th><th>Status</th><th>Last sync</th><th>Watermark</th><th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for t in sync_info.tenants %}
+            <tr>
+              <td>{{ t.customer_name }}</td>
+              <td>{{ t.name }}</td>
+              <td>
+                {% if t.last_sync_status == 'ok' %}
+                <span class="badge badge-success">ok</span>
+                {% elif t.last_sync_status == 'error' %}
+                <span class="badge badge-error">error</span>
+                {% else %}
+                <span class="badge badge-medium">never</span>
+                {% endif %}
+              </td>
+              <td>{{ t.last_sync_at or '—' }}</td>
+              <td><code>{{ t.last_synced_event_at or '—' }}</code></td>
+              <td>{{ t.last_sync_error or '' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% endif %}
+
+    <section class="panel">
+      <h3 class="panel-title">Search & filters</h3>
       <form method="get" action="/" class="form-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: end;">
         <div class="field">
           <label>From date</label>

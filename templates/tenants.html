@@ -19,6 +19,7 @@
     <div class="nav-section">Admin</div>
     <a class="nav-link" href="/users"><span class="ico">◉</span> Users</a>
     <a class="nav-link" href="/audit"><span class="ico">▦</span> Audit</a>
+    <a class="nav-link" href="/settings/email"><span class="ico">✉</span> Email</a>
     {% endif %}
     <div class="sidebar-foot">
       <div class="user-chip">
@@ -35,7 +36,7 @@
       <div>
         <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
         <h2>Tenants</h2>
-        <p class="subtitle">Connect Microsoft 365 tenancies · assign customer &amp; group</p>
+        <p class="subtitle">Connect Microsoft 365 tenancies · assign customer & group</p>
       </div>
       <div class="actions">
         <article class="stat-card" style="padding:8px 14px;margin:0">
@@ -48,6 +49,7 @@
     <div class="info-box">
       <strong>Customer / group:</strong> use these to segment the dashboard.
       <strong>Secret:</strong> paste a Client Secret Value, or an environment variable name (direct secret wins if both are set).
+      <strong>Watermark:</strong> last Graph event time used so re-syncs do not re-alert duplicates.
     </div>
 
     <section class="panel">
@@ -93,8 +95,8 @@
       <table>
         <thead>
           <tr>
-            <th>Customer</th><th>Group</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th>
-            <th>Secret source</th><th>Env var</th><th>Added</th>
+            <th>Customer</th><th>Group</th><th>Connection</th><th>Tenant ID</th>
+            <th>Secret</th><th>Last sync</th><th>Status</th><th>Watermark</th>
           </tr>
         </thead>
         <tbody>
@@ -104,10 +106,18 @@
             <td>{{ t['customer_group'] or "—" }}</td>
             <td>{{ t['name'] }}</td>
             <td><code>{{ t['tenant_id'] }}</code></td>
-            <td><code>{{ t['client_id'] }}</code></td>
             <td>{{ t.get('secret_source', 'N/A') }}</td>
-            <td>{{ t.get('client_secret_ref', 'N/A') }}</td>
-            <td>{{ t.get('created_at', 'N/A') }}</td>
+            <td>{{ t.get('last_sync_at') or '—' }}</td>
+            <td>
+              {% if t.get('last_sync_status') == 'ok' %}
+              <span class="badge badge-success">ok</span>
+              {% elif t.get('last_sync_status') == 'error' %}
+              <span class="badge badge-error" title="{{ t.get('last_sync_error') or '' }}">error</span>
+              {% else %}
+              <span class="badge badge-medium">never</span>
+              {% endif %}
+            </td>
+            <td><code>{{ t.get('last_synced_event_at') or '—' }}</code></td>
           </tr>
           {% else %}
           <tr><td class="empty" colspan="8">No tenants configured yet.</td></tr>

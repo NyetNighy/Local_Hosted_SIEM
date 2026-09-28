@@ -27,6 +27,19 @@ OPENCLAWAI_URL = os.getenv("OPENCLAWAI_URL", "").strip()
 OPENCLAWAI_API_KEY = os.getenv("OPENCLAWAI_API_KEY", "").strip()
 OPENCLAWAI_TIMEOUT = float(os.getenv("OPENCLAWAI_TIMEOUT", "10"))
 
+# Teams / Slack incoming webhooks (optional response channels)
+TEAMS_WEBHOOK_ENABLED = os.getenv("TEAMS_WEBHOOK_ENABLED", "false").lower() == "true"
+TEAMS_WEBHOOK_URL = os.getenv("TEAMS_WEBHOOK_URL", "").strip()
+SLACK_WEBHOOK_ENABLED = os.getenv("SLACK_WEBHOOK_ENABLED", "false").lower() == "true"
+SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "").strip()
+WEBHOOK_MIN_SEVERITY = (
+    os.getenv("WEBHOOK_MIN_SEVERITY", os.getenv("ALERT_EMAIL_MIN_SEVERITY", "medium"))
+    .strip()
+    .lower()
+    or "medium"
+)
+WEBHOOK_TIMEOUT = float(os.getenv("WEBHOOK_TIMEOUT", "10"))
+
 GITHUB_REPO = os.getenv("SIEM_GITHUB_REPO", "").strip()
 GITHUB_BRANCH = os.getenv("SIEM_GITHUB_BRANCH", "main").strip() or "main"
 

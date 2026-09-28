@@ -1,141 +1,96 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect M365 Tenant</title>
-  <style>
-    :root {
-      --bg: #0b1020;
-      --panel: #121a2f;
-      --panel-soft: #16213d;
-      --text: #e9eefc;
-      --muted: #9fb0d7;
-      --line: #253459;
-      --accent: #4f7cff;
-      --accent-2: #18c7a1;
-      --danger: #ff6b6b;
-      --warn: #ffb347;
-      --shadow: 0 12px 24px rgba(0, 0, 0, 0.28);
-    }
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; color: var(--text); background: var(--bg); min-height: 100vh; padding: 28px; }
-    .container { max-width: 1320px; margin: 0 auto; }
-    .topbar { display: flex; justify-content: space-between; gap: 14px; align-items: center; margin-bottom: 18px; }
-    .title-wrap h1 { margin: 0; font-size: 30px; }
-    .subtitle { margin: 6px 0 0; color: var(--muted); font-size: 14px; }
-    .error { background: #3b1622; color: #ffd3de; border: 1px solid #8d364f; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
-    .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 18px; }
-    .card { background: linear-gradient(180deg, #152241, #111b34); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); }
-    .card .label { color: var(--muted); font-size: 13px; margin-bottom: 6px; }
-    .card .value { font-size: 28px; font-weight: 700; }
-    .controls { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 16px; }
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    input[type="text"], input[type="password"], select { width: 100%; padding: 11px 12px; border-radius: 10px; border: 1px solid var(--line); background: #0f1730; color: var(--text); font-size: 14px; }
-    input::placeholder { color: var(--muted); }
-    select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239fb0d7' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 32px; }
-    .btn { border: 1px solid transparent; background: #1d2b50; color: var(--text); padding: 10px 13px; border-radius: 10px; text-decoration: none; cursor: pointer; font-weight: 600; font-size: 13px; }
-    .btn.primary { background: var(--accent); color: #fff; }
-    .btn.success { background: var(--accent-2); color: #06231d; }
-    .btn.subtle { border-color: var(--line); }
-    .divider { text-align: center; color: var(--muted); font-size: 12px; padding: 4px 0; }
-    .table-wrap { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
-    table { width: 100%; border-collapse: collapse; }
-    thead { background: var(--panel-soft); }
-    th, td { padding: 11px 10px; border-bottom: 1px solid var(--line); font-size: 13px; text-align: left; }
-    tbody tr:hover { background: #1a2540; }
-    .label-tip { color: var(--muted); font-size: 12px; margin-top: 4px; }
-    .sec-note { background: #1a2540; border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; color: var(--muted); font-size: 12px; }
-    .sec-note strong { color: var(--text); }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="topbar">
-      <div class="title-wrap">
-        <h1>Microsoft 365 Multi-Tenant SIEM</h1>
-        <p class="subtitle">Signed in as <strong>{{ user }}</strong> ({{ role }})</p>
+{% extends "base.html" %}
+{% block title %}Tenants · CodexSIEM{% endblock %}
+{% block body %}
+<div class="shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">CS</div>
+      <div>
+        <h1>Tenants</h1>
+        <p class="subtitle">Signed in as <strong>{{ user }}</strong> · {{ role }}</p>
       </div>
-      <form method="post" action="/logout"><button class="btn subtle" type="submit">Logout</button></form>
     </div>
+    <nav class="nav">
+      <a class="btn ghost" href="/">Dashboard</a>
+      <form method="post" action="/logout" style="margin:0"><button class="btn ghost" type="submit">Logout</button></form>
+    </nav>
+  </header>
 
-    <section class="controls">
-      <a class="btn subtle" href="/">← Back to Dashboard</a>
-    </section>
-
-    <div class="sec-note">
-      <strong>Secret configuration:</strong> you can paste a Client Secret Value directly, or provide an environment variable name. If both are provided, the direct secret is used.
-    </div>
-
-    <section class="controls" style="flex-direction: column; align-items: stretch;">
-      <form method="post" action="/tenants" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
-        <div>
-          <input name="customer_name" placeholder="Customer Name (e.g. Contoso Ltd)" required />
-          <div class="label-tip">Business or client name</div>
-        </div>
-        <div>
-          <input name="name" placeholder="Connection Display Name" required />
-          <div class="label-tip">Friendly name for this connection</div>
-        </div>
-        <div>
-          <input name="tenant_id" placeholder="Tenant ID (GUID)" required />
-          <div class="label-tip">Azure AD Tenant GUID</div>
-        </div>
-        <div>
-          <input name="client_id" placeholder="App Client ID" required />
-          <div class="label-tip">Azure AD App Registration Client ID</div>
-        </div>
-        <div>
-          <input name="client_secret" placeholder="Client Secret Value" />
-          <div class="label-tip">Direct secret value (stored encrypted in DB)</div>
-        </div>
-        <div>
-          <input name="client_secret_ref" placeholder="Or env var name (e.g. TENANT_A_CLIENT_SECRET)" />
-          <div class="label-tip">Name of env var holding the secret</div>
-        </div>
-        <div style="grid-column: 1 / -1; display: flex; gap: 10px; align-items: center;">
-          <button class="btn success" type="submit" style="flex: 0 0 auto;">Save Tenant</button>
-          <span style="color: var(--muted); font-size: 12px;">At least one secret field required</span>
-        </div>
-      </form>
-    </section>
-
-    <section class="card-grid">
-      <article class="card"><div class="label">Configured Tenancies</div><div class="value">{{ tenants|length }}</div></article>
-    </section>
-
-    <section class="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Customer</th>
-            <th>Connection</th>
-            <th>Tenant ID</th>
-            <th>Client ID</th>
-            <th>Secret Source</th>
-            <th>Secret Env Var</th>
-            <th>Added</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for t in tenants %}
-          <tr>
-            <td>{{ t['customer_name'] }}</td>
-            <td>{{ t['name'] }}</td>
-            <td>{{ t['tenant_id'] }}</td>
-            <td>{{ t['client_id'] }}</td>
-            <td>{{ t.get('secret_source', 'N/A') }}</td>
-            <td>{{ t.get('client_secret_ref', 'N/A') }}</td>
-            <td>{{ t.get('created_at', 'N/A') }}</td>
-          </tr>
-          {% else %}
-          <tr>
-            <td colspan="7">No tenants configured yet.</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
+  <div class="info-box">
+    <strong>Secret configuration:</strong>
+    paste a Client Secret Value directly, or provide an environment variable name.
+    If both are provided, the direct secret is used.
   </div>
-</body>
-</html>
+
+  <section class="panel">
+    <h2 class="panel-title">Connect Microsoft 365 tenant</h2>
+    <form method="post" action="/tenants" class="form-grid">
+      <div class="field">
+        <label>Customer name</label>
+        <input name="customer_name" placeholder="e.g. Contoso Ltd" required />
+        <div class="hint">Business or client name</div>
+      </div>
+      <div class="field">
+        <label>Connection name</label>
+        <input name="name" placeholder="Friendly connection name" required />
+        <div class="hint">Label shown in the UI</div>
+      </div>
+      <div class="field">
+        <label>Tenant ID</label>
+        <input name="tenant_id" placeholder="Azure AD Tenant GUID" required />
+      </div>
+      <div class="field">
+        <label>App Client ID</label>
+        <input name="client_id" placeholder="App registration Client ID" required />
+      </div>
+      <div class="field">
+        <label>Client secret value</label>
+        <input name="client_secret" type="password" placeholder="Optional direct secret" />
+        <div class="hint">Stored in the local database</div>
+      </div>
+      <div class="field">
+        <label>Or env var name</label>
+        <input name="client_secret_ref" placeholder="e.g. TENANT_A_CLIENT_SECRET" />
+        <div class="hint">Name of an environment variable holding the secret</div>
+      </div>
+      <div class="full toolbar">
+        <button class="btn success" type="submit">Save tenant</button>
+        <span class="hint">At least one secret field is required</span>
+      </div>
+    </form>
+  </section>
+
+  <section class="card-grid" style="grid-template-columns: minmax(0, 1fr); max-width: 280px;">
+    <article class="stat-card">
+      <div class="label">Configured tenancies</div>
+      <div class="value">{{ tenants|length }}</div>
+    </article>
+  </section>
+
+  <section class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Customer</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th>
+          <th>Secret source</th><th>Env var</th><th>Added</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for t in tenants %}
+        <tr>
+          <td>{{ t['customer_name'] }}</td>
+          <td>{{ t['name'] }}</td>
+          <td><code>{{ t['tenant_id'] }}</code></td>
+          <td><code>{{ t['client_id'] }}</code></td>
+          <td>{{ t.get('secret_source', 'N/A') }}</td>
+          <td>{{ t.get('client_secret_ref', 'N/A') }}</td>
+          <td>{{ t.get('created_at', 'N/A') }}</td>
+        </tr>
+        {% else %}
+        <tr><td class="empty" colspan="7">No tenants configured yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endblock %}

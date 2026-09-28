@@ -1,4 +1,4 @@
-"""Alert email and OpenClaw webhook notifications."""
+"""Alert email, Teams/Slack webhooks, and OpenClaw notifications."""
 from __future__ import annotations
 
 import logging
@@ -16,6 +16,8 @@ from codexsiem.config import (
     OPENCLAWAI_ENABLED,
     OPENCLAWAI_TIMEOUT,
     OPENCLAWAI_URL,
+    SLACK_WEBHOOK_ENABLED,
+    SLACK_WEBHOOK_URL,
     SMTP_FROM,
     SMTP_HOST,
     SMTP_PASSWORD,
@@ -24,7 +26,11 @@ from codexsiem.config import (
     SMTP_USE_SSL,
     SMTP_USE_TLS,
     SMTP_USER,
+    TEAMS_WEBHOOK_ENABLED,
+    TEAMS_WEBHOOK_URL,
     TEMPLATES_DIR,
+    WEBHOOK_MIN_SEVERITY,
+    WEBHOOK_TIMEOUT,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -47,7 +53,6 @@ def render_alert_email_html(context: Dict[str, Any]) -> str:
 
 
 def email_config_status() -> Dict[str, Any]:
-    """Return a non-secret summary of email configuration for UI/status checks."""
     missing = []
     if not ALERT_EMAIL_ENABLED:
         return {
@@ -78,14 +83,27 @@ def email_config_status() -> Dict[str, Any]:
     }
 
 
-def _severity_allowed(severity: str) -> bool:
+def webhook_config_status() -> Dict[str, Any]:
+    return {
+        "teams": {
+            "enabled": TEAMS_WEBHOOK_ENABLED,
+            "ready": TEAMS_WEBHOOK_ENABLED and bool(TEAMS_WEBHOOK_URL),
+        },
+        "slack": {
+            "enabled": SLACK_WEBHOOK_ENABLED,
+            "ready": SLACK_WEBHOOK_ENABLED and bool(SLACK_WEBHOOK_URL),
+        },
+        "min_severity": WEBHOOK_MIN_SEVERITY,
+    }
+
+
+def _severity_allowed(severity: str, min_sev: str) -> bool:
     rank = _SEVERITY_RANK.get((severity or "").lower(), 0)
-    min_rank = _SEVERITY_RANK.get(ALERT_EMAIL_MIN_SEVERITY.lower(), 1)
+    min_rank = _SEVERITY_RANK.get((min_sev or "low").lower(), 1)
     return rank >= min_rank
 
 
 def send_alert_email(subject: str, body: str, html_body: str = "") -> bool:
-    """Send a multipart alert email. Returns True on success."""
     if not ALERT_EMAIL_ENABLED:
         return False
     if not SMTP_HOST or not SMTP_FROM or not SMTP_TO:
@@ -120,50 +138,132 @@ def send_alert_email(subject: str, body: str, html_body: str = "") -> bool:
         return False
 
 
-def notify_alert(payload: Dict[str, Any]) -> bool:
-    """Render HTML + plain text and send if severity meets the minimum threshold."""
+def _alert_text(payload: Dict[str, Any]) -> str:
+    return (
+        f"*{str(payload.get('severity') or 'medium').upper()}* · "
+        f"{payload.get('customer_name') or 'Unassigned'}\n"
+        f"{payload.get('reason') or ''}\n"
+        f"User: {payload.get('user_principal_name') or '—'} | "
+        f"IP: {payload.get('ip_address') or '—'} | "
+        f"Tenant: {payload.get('tenant_id') or '—'}"
+    )
+
+
+def send_teams_alert(payload: Dict[str, Any]) -> bool:
+    if not TEAMS_WEBHOOK_ENABLED or not TEAMS_WEBHOOK_URL:
+        return False
     severity = str(payload.get("severity") or "medium")
-    if not _severity_allowed(severity):
-        LOGGER.debug("Alert email skipped (severity %s below min %s)", severity, ALERT_EMAIL_MIN_SEVERITY)
+    if not _severity_allowed(severity, WEBHOOK_MIN_SEVERITY):
+        return False
+    # Adaptive Card–compatible simple MessageCard
+    body = {
+        "@type": "MessageCard",
+        "@context": "https://schema.org/extensions",
+        "summary": f"CodexSIEM {severity} alert",
+        "themeColor": {"high": "FF6B81", "medium": "FFB020", "low": "22D3A6"}.get(
+            severity.lower(), "5B8CFF"
+        ),
+        "title": f"[CodexSIEM] {severity.upper()} · {payload.get('customer_name') or 'Unassigned'}",
+        "sections": [
+            {
+                "facts": [
+                    {"name": "Reason", "value": str(payload.get("reason") or "")},
+                    {"name": "User", "value": str(payload.get("user_principal_name") or "")},
+                    {"name": "IP", "value": str(payload.get("ip_address") or "")},
+                    {"name": "App", "value": str(payload.get("app_display_name") or "")},
+                    {"name": "Tenant", "value": str(payload.get("tenant_id") or "")},
+                    {"name": "Group", "value": str(payload.get("customer_group") or "")},
+                    {"name": "Rule", "value": str(payload.get("rule_id") or "")},
+                ],
+                "markdown": True,
+            }
+        ],
+    }
+    try:
+        resp = httpx.post(TEAMS_WEBHOOK_URL, json=body, timeout=WEBHOOK_TIMEOUT)
+        resp.raise_for_status()
+        LOGGER.info("Teams webhook sent: %s", payload.get("reason"))
+        return True
+    except Exception:
+        LOGGER.exception("Teams webhook failed")
         return False
 
-    customer = payload.get("customer_name") or "Unassigned"
-    tenant_id = payload.get("tenant_id") or ""
-    reason = payload.get("reason") or ""
-    subject = f"[CodexSIEM] {severity.upper()} · {customer} · {reason[:60]}"
 
-    body = (
-        f"CodexSIEM alert\n"
-        f"Severity: {severity}\n"
-        f"Customer: {customer}\n"
-        f"Group: {payload.get('customer_group') or ''}\n"
-        f"Tenant: {tenant_id}\n"
-        f"User: {payload.get('user_principal_name') or ''}\n"
-        f"IP: {payload.get('ip_address') or ''}\n"
-        f"App: {payload.get('app_display_name') or ''}\n"
-        f"Reason: {reason}\n"
-        f"Sign-in time: {payload.get('signin_time') or ''}\n"
-        f"Alert time: {payload.get('created_at') or ''}\n"
-    )
-    html_body = render_alert_email_html(
-        {
-            "severity": severity,
-            "customer_name": customer,
-            "customer_group": payload.get("customer_group") or "",
-            "tenant_id": tenant_id,
-            "user_principal_name": payload.get("user_principal_name") or "",
-            "ip_address": payload.get("ip_address") or "",
-            "app_display_name": payload.get("app_display_name") or "",
-            "reason": reason,
-            "created_at": payload.get("created_at") or "",
-            "signin_time": payload.get("signin_time") or "",
-        }
-    )
-    return send_alert_email(subject=subject, body=body, html_body=html_body)
+def send_slack_alert(payload: Dict[str, Any]) -> bool:
+    if not SLACK_WEBHOOK_ENABLED or not SLACK_WEBHOOK_URL:
+        return False
+    severity = str(payload.get("severity") or "medium")
+    if not _severity_allowed(severity, WEBHOOK_MIN_SEVERITY):
+        return False
+    text = _alert_text(payload)
+    body = {
+        "text": f"[CodexSIEM] {severity.upper()} alert",
+        "blocks": [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": text},
+            }
+        ],
+    }
+    try:
+        resp = httpx.post(SLACK_WEBHOOK_URL, json=body, timeout=WEBHOOK_TIMEOUT)
+        resp.raise_for_status()
+        LOGGER.info("Slack webhook sent: %s", payload.get("reason"))
+        return True
+    except Exception:
+        LOGGER.exception("Slack webhook failed")
+        return False
+
+
+def notify_alert(payload: Dict[str, Any]) -> bool:
+    """Email + Teams + Slack for one alert (best-effort). Returns True if email sent."""
+    severity = str(payload.get("severity") or "medium")
+    email_ok = False
+    if _severity_allowed(severity, ALERT_EMAIL_MIN_SEVERITY):
+        customer = payload.get("customer_name") or "Unassigned"
+        tenant_id = payload.get("tenant_id") or ""
+        reason = payload.get("reason") or ""
+        subject = f"[CodexSIEM] {severity.upper()} · {customer} · {reason[:60]}"
+        body = (
+            f"CodexSIEM alert\n"
+            f"Severity: {severity}\n"
+            f"Customer: {customer}\n"
+            f"Group: {payload.get('customer_group') or ''}\n"
+            f"Tenant: {tenant_id}\n"
+            f"User: {payload.get('user_principal_name') or ''}\n"
+            f"IP: {payload.get('ip_address') or ''}\n"
+            f"App: {payload.get('app_display_name') or ''}\n"
+            f"Reason: {reason}\n"
+            f"Rule: {payload.get('rule_id') or ''}\n"
+            f"Sign-in time: {payload.get('signin_time') or ''}\n"
+            f"Alert time: {payload.get('created_at') or ''}\n"
+        )
+        html_body = render_alert_email_html(
+            {
+                "severity": severity,
+                "customer_name": customer,
+                "customer_group": payload.get("customer_group") or "",
+                "tenant_id": tenant_id,
+                "user_principal_name": payload.get("user_principal_name") or "",
+                "ip_address": payload.get("ip_address") or "",
+                "app_display_name": payload.get("app_display_name") or "",
+                "reason": reason,
+                "created_at": payload.get("created_at") or "",
+                "signin_time": payload.get("signin_time") or "",
+            }
+        )
+        email_ok = send_alert_email(subject=subject, body=body, html_body=html_body)
+    else:
+        LOGGER.debug(
+            "Alert email skipped (severity %s below min %s)", severity, ALERT_EMAIL_MIN_SEVERITY
+        )
+
+    send_teams_alert(payload)
+    send_slack_alert(payload)
+    return email_ok
 
 
 def send_test_email(to_override: Optional[str] = None) -> Dict[str, Any]:
-    """Send a test message to verify SMTP settings. Optionally override recipient."""
     status = email_config_status()
     if not status["enabled"]:
         return {"ok": False, "error": status["reason"]}

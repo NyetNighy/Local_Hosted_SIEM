@@ -1,75 +1,97 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · CodexSIEM{% endblock %}
 {% block body %}
-<div class="shell">
-  <header class="topbar">
-    <div class="brand">
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
       <div class="brand-mark">CS</div>
       <div>
         <h1>CodexSIEM</h1>
-        <p class="subtitle">Signed in as <strong>{{ user }}</strong> · {{ role }}</p>
+        <div class="tag">M365 SIEM</div>
       </div>
     </div>
-    <nav class="nav">
-      {% if can_manage %}<a class="btn ghost" href="/tenants">Tenants</a>{% endif %}
-      {% if is_admin %}
-      <a class="btn ghost" href="/users">Users</a>
-      <a class="btn ghost" href="/audit">Audit</a>
-      {% endif %}
-      <form method="post" action="/logout" style="margin:0"><button class="btn ghost" type="submit">Logout</button></form>
-    </nav>
-  </header>
+    <div class="nav-section">Monitor</div>
+    <a class="nav-link active" href="/"><span class="ico">◈</span> Dashboard</a>
+    {% if can_manage %}
+    <div class="nav-section">Operations</div>
+    <a class="nav-link" href="/tenants"><span class="ico">◎</span> Tenants</a>
+    {% endif %}
+    {% if is_admin %}
+    <div class="nav-section">Admin</div>
+    <a class="nav-link" href="/users"><span class="ico">◉</span> Users</a>
+    <a class="nav-link" href="/audit"><span class="ico">▦</span> Audit</a>
+    {% endif %}
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <div class="name">{{ user }}</div>
+        <div class="role">{{ role }}</div>
+      </div>
+      <form method="post" action="/logout" style="margin:0">
+        <button class="btn ghost block" type="submit">Logout</button>
+      </form>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
+        <h2>Dashboard</h2>
+        <p class="subtitle">Multi-tenant Microsoft 365 alerts</p>
+      </div>
+      <div class="actions">
+        {% if can_manage %}
+        <form method="post" action="/sync" style="margin:0"><button class="btn success" type="submit">Sync Now</button></form>
+        <form method="post" action="/check-updates" style="margin:0"><button class="btn ghost" type="submit">Updates</button></form>
+        {% endif %}
+        <a class="btn ghost" href="/export/alerts.csv?q={{ q }}">Export CSV</a>
+      </div>
+    </div>
 
-  {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
-  {% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
+    {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+    {% if info %}<div class="alert alert-info">{{ info }}</div>{% endif %}
 
-  <section class="card-grid">
-    <article class="stat-card"><div class="label">Tenants</div><div class="value">{{ tenant_count }}</div></article>
-    <article class="stat-card"><div class="label">Sign-ins</div><div class="value">{{ signin_count }}</div></article>
-    <article class="stat-card"><div class="label">Alerts</div><div class="value">{{ alert_count }}</div></article>
-  </section>
+    <section class="card-grid">
+      <article class="stat-card"><div class="label">Tenants</div><div class="value">{{ tenant_count }}</div></article>
+      <article class="stat-card"><div class="label">Sign-ins</div><div class="value">{{ signin_count }}</div></article>
+      <article class="stat-card"><div class="label">Alerts</div><div class="value">{{ alert_count }}</div></article>
+    </section>
 
-  <section class="panel">
-    <div class="toolbar">
+    <section class="panel">
       <form class="search-form" method="get" action="/">
         <input type="text" name="q" value="{{ q }}" placeholder="Search customer, tenant, user, IP, or app" />
         <button class="btn primary" type="submit">Search</button>
       </form>
-      <a class="btn ghost" href="/export/alerts.csv?q={{ q }}">Export CSV</a>
-      {% if can_manage %}
-      <form method="post" action="/sync" style="margin:0"><button class="btn success" type="submit">Sync Now</button></form>
-      <form method="post" action="/check-updates" style="margin:0"><button class="btn ghost" type="submit">Check Updates</button></form>
-      {% endif %}
-    </div>
-  </section>
+    </section>
 
-  <section class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Alert Time</th><th>Customer</th><th>Tenant</th><th>User</th>
-          <th>IP</th><th>Application</th><th>Sign-in</th><th>Severity</th><th>Reason</th><th>Error</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in alerts %}
-        <tr>
-          <td>{{ row["alerted_at"] }}</td>
-          <td>{{ row["customer_name"] }}</td>
-          <td><code>{{ row["tenant_id"] }}</code></td>
-          <td>{{ row["user_principal_name"] }}</td>
-          <td>{{ row["ip_address"] }}</td>
-          <td>{{ row["app_display_name"] }}</td>
-          <td>{{ row["signin_time"] }}</td>
-          <td><span class="badge badge-{{ row['severity'] }}">{{ row["severity"] }}</span></td>
-          <td>{{ row["reason"] }}</td>
-          <td>{{ row["status_error_code"] }} {{ row["status_failure_reason"] }}</td>
-        </tr>
-        {% else %}
-        <tr><td class="empty" colspan="10">No alerts found for the current filter.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+    <section class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Alert Time</th><th>Customer</th><th>Tenant</th><th>User</th>
+            <th>IP</th><th>App</th><th>Sign-in</th><th>Severity</th><th>Reason</th><th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in alerts %}
+          <tr>
+            <td>{{ row["alerted_at"] }}</td>
+            <td>{{ row["customer_name"] }}</td>
+            <td><code>{{ row["tenant_id"] }}</code></td>
+            <td>{{ row["user_principal_name"] }}</td>
+            <td>{{ row["ip_address"] }}</td>
+            <td>{{ row["app_display_name"] }}</td>
+            <td>{{ row["signin_time"] }}</td>
+            <td><span class="badge badge-{{ row['severity'] }}">{{ row["severity"] }}</span></td>
+            <td>{{ row["reason"] }}</td>
+            <td>{{ row["status_error_code"] }} {{ row["status_failure_reason"] }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="empty" colspan="10">No alerts found for the current filter.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
 </div>
 {% endblock %}

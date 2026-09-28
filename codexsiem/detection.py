@@ -1,10 +1,17 @@
-"""Sign-in detection / alerting rules."""
+"""Sign-in detection / alerting rules.
+
+Primary path: YAML rules via codexsiem.rules_engine.
+Legacy hardcoded functions remain as fallback if the rules file is missing.
+"""
 from __future__ import annotations
 
+import logging
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, List
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
+LOGGER = logging.getLogger(__name__)
 
 LEGACY_AUTH_CLIENTS = {
     "imap4",
@@ -18,6 +25,7 @@ HIGH_RISK_COUNTRIES = {"RU", "KP", "IR"}
 
 
 def alert_reasons(signin: Dict[str, Any]) -> List[str]:
+    """Legacy single-event reasons (fallback only)."""
     reasons: List[str] = []
     status = signin.get("status") or {}
     err = status.get("errorCode")
@@ -45,13 +53,14 @@ def alert_reasons(signin: Dict[str, Any]) -> List[str]:
 
 
 def severity_for_reason(reason: str) -> str:
-    high_markers = ("Failed", "Risk", "impossible travel")
+    high_markers = ("Failed", "Risk", "impossible travel", "failed sign-ins")
     return "high" if any(x in reason for x in high_markers) else "medium"
 
 
 def add_impossible_travel_reason(
     conn: sqlite3.Connection, tenant_id: str, signin: Dict[str, Any]
 ) -> List[str]:
+    """Legacy impossible-travel check (fallback only)."""
     upn = signin.get("userPrincipalName")
     created = signin.get("createdDateTime")
     location = signin.get("location") or {}
@@ -83,3 +92,45 @@ def add_impossible_travel_reason(
             f"Possible impossible travel: user moved from {row['location_country']} to {country} within 60 minutes"
         ]
     return []
+
+
+def evaluate_alerts(
+    signin: Dict[str, Any],
+    tenant_id: str,
+    conn: sqlite3.Connection,
+    rules_path: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Preferred entrypoint: YAML rules engine, with legacy fallback.
+
+    Returns list of dicts with keys:
+      rule_id, severity, reason, group, tags, mitre, notify, name
+    """
+    from codexsiem.config import DETECTION_RULES_PATH
+    from codexsiem.rules_engine import evaluate_signin, rules_status
+
+    path = rules_path or DETECTION_RULES_PATH
+    status = rules_status(path)
+    if status.get("ok"):
+        return evaluate_signin(signin, tenant_id, conn, rules_path=path)
+
+    LOGGER.warning(
+        "YAML rules unavailable (%s); using legacy detection", status.get("error")
+    )
+    reasons = alert_reasons(signin)
+    reasons.extend(add_impossible_travel_reason(conn, tenant_id, signin))
+    out: List[Dict[str, Any]] = []
+    for reason in reasons:
+        out.append(
+            {
+                "rule_id": "legacy",
+                "name": "legacy",
+                "severity": severity_for_reason(reason),
+                "reason": reason,
+                "group": "",
+                "tags": [],
+                "mitre": [],
+                "notify": True,
+            }
+        )
+    return out

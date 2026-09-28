@@ -14,7 +14,7 @@ import logging
 import subprocess
 import traceback
 from contextlib import closing
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import FastAPI, Form, Request
@@ -46,10 +46,19 @@ from codexsiem.config import (
     TEMPLATES_DIR,
     validate_runtime_config,
 )
-from codexsiem.db import audit_log, db_conn, has_users, init_db, utc_now_iso
+from codexsiem.db import (
+    audit_log,
+    db_conn,
+    get_tenant_watermark,
+    has_users,
+    init_db,
+    sync_status_summary,
+    update_tenant_sync,
+    utc_now_iso,
+)
 from codexsiem.detection import evaluate_alerts
 from codexsiem.graph import fetch_signins, graph_token
-from codexsiem.notifications import notify_alert, send_openclawai_alert
+from codexsiem.notifications import notify_alert, send_openclawai_alert, webhook_config_status
 from codexsiem.rules_engine import rules_status
 
 LOGGER = logging.getLogger(__name__)
@@ -177,10 +186,12 @@ def bootstrap_admin_user() -> None:
             conn.commit()
 
 
-def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) -> int:
+def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) -> Tuple[int, Optional[str]]:
+    """Ingest sign-ins and fire alerts. Returns (ingested_count, max_event_createdDateTime)."""
     import sqlite3
 
     ingested = 0
+    max_event: Optional[str] = None
     with closing(db_conn()) as conn:
         customer_row = conn.execute(
             "SELECT customer_name, customer_group FROM tenants WHERE tenant_id = ?",
@@ -200,6 +211,9 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
             graph_id = signin.get("id")
             if not graph_id:
                 continue
+            created = signin.get("createdDateTime")
+            if created and (max_event is None or str(created) > max_event):
+                max_event = str(created)
             status = signin.get("status") or {}
             location = signin.get("location") or {}
             try:
@@ -214,7 +228,7 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                     (
                         tenant_id,
                         graph_id,
-                        signin.get("createdDateTime"),
+                        created,
                         signin.get("userPrincipalName"),
                         signin.get("ipAddress"),
                         signin.get("appDisplayName"),
@@ -228,6 +242,7 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                 )
                 ingested += 1
             except sqlite3.IntegrityError:
+                # Already stored — still advance watermark but do not re-alert
                 continue
 
             alerts = evaluate_alerts(signin, tenant_id, conn)
@@ -259,14 +274,14 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                     "user_principal_name": signin.get("userPrincipalName"),
                     "ip_address": signin.get("ipAddress"),
                     "app_display_name": signin.get("appDisplayName"),
-                    "signin_time": signin.get("createdDateTime"),
+                    "signin_time": created,
                     "status": signin.get("status") or {},
                 }
                 send_openclawai_alert(payload)
                 if hit.get("notify", True):
                     notify_alert(payload)
         conn.commit()
-    return ingested
+    return ingested, max_event
 
 
 async def sync_all_tenants() -> Dict[str, Any]:
@@ -275,17 +290,24 @@ async def sync_all_tenants() -> Dict[str, Any]:
         tenants = conn.execute("SELECT * FROM tenants ORDER BY name ASC").fetchall()
     for tenant in tenants:
         results["tenants"] += 1
+        tid = tenant["tenant_id"]
         try:
             secret = resolve_client_secret(tenant)
             if not secret:
                 raise ValueError(
                     f"Missing client secret. Set env var '{tenant['client_secret_ref']}' or update tenant config."
                 )
-            token = await graph_token(tenant["tenant_id"], tenant["client_id"], secret)
-            signins = await fetch_signins(token, lookback_minutes=SYNC_MINUTES)
-            results["ingested"] += persist_signins_and_alerts(tenant["tenant_id"], signins)
+            token = await graph_token(tid, tenant["client_id"], secret)
+            watermark = get_tenant_watermark(tid)
+            signins = await fetch_signins(
+                token, lookback_minutes=SYNC_MINUTES, since_watermark=watermark
+            )
+            count, max_event = persist_signins_and_alerts(tid, signins)
+            results["ingested"] += count
+            update_tenant_sync(tid, status="ok", error="", watermark=max_event or watermark)
         except Exception as exc:
             results["errors"].append(f"{tenant['name']}: {exc}")
+            update_tenant_sync(tid, status="error", error=str(exc)[:500])
     return results
 
 
@@ -308,7 +330,22 @@ async def startup() -> None:
 
 @app.get("/health")
 async def health() -> JSONResponse:
-    return JSONResponse({"status": "ok", "rules": rules_status()})
+    sync = sync_status_summary()
+    return JSONResponse(
+        {
+            "status": "ok",
+            "rules": rules_status(),
+            "webhooks": webhook_config_status(),
+            "sync": {
+                "tenant_count": sync["tenant_count"],
+                "ok": sync["ok"],
+                "failed": sync["failed"],
+                "never_synced": sync["never_synced"],
+                "oldest_sync_at": sync["oldest_sync_at"],
+                "newest_sync_at": sync["newest_sync_at"],
+            },
+        }
+    )
 
 
 @app.get("/ready")

@@ -4,7 +4,7 @@ A lightweight **multi-tenant Microsoft 365 SIEM** that:
 
 - Connects to multiple M365 tenancies (each with its own Entra app credentials)
 - Pulls sign-in logs from Microsoft Graph (`auditLogs/signIns`)
-- Generates alerts for suspicious sign-ins (failed attempts, risk, conditional access, legacy auth, high-risk countries, impossible travel)
+- Generates alerts for suspicious sign-ins via **YAML detection rules** (failed attempts, risk, conditional access, legacy auth, high-risk countries, impossible travel, failed-login bursts)
 - Groups data by **customer**, **group**, and **M365 tenancy**
 - Provides a modern dark UI with sidebar navigation, dense tables, and sticky column headers
 - Supports advanced search/filters and CSV export
@@ -98,14 +98,29 @@ export ALERT_EMAIL_MIN_SEVERITY=medium   # low | medium | high
 
 Email failures are logged and do not stop sign-in ingestion.
 
-### Detection rules
+### YAML detection rules
 
-- Failed sign-ins
-- Sign-in risk levels
-- Conditional access failures / not applied
-- Legacy auth (IMAP/POP/SMTP/EAS/other clients)
-- High-risk country codes (`RU`, `KP`, `IR`)
-- Simple impossible-travel heuristic (country change within 60 minutes)
+Detections are defined in [`rules/detections.yaml`](rules/detections.yaml) and evaluated by `codexsiem/rules_engine.py` on each new sign-in during sync.
+
+**Bundled rules:**
+
+| Rule ID | What it detects |
+|---------|-----------------|
+| `auth.failed_signin` | Non-zero Graph error code |
+| `auth.risk_level` | Elevated `riskLevelDuringSignIn` |
+| `auth.conditional_access` | CA `failure` / `notApplied` |
+| `auth.legacy_client` | IMAP/POP/SMTP/EAS/other clients |
+| `geo.high_risk_country` | Countries in the `high_risk_countries` list |
+| `auth.failed_burst` | ≥ 5 failures for same user in 15 minutes |
+| `geo.impossible_travel` | Country change within 60 minutes |
+
+Tune thresholds, severity, country lists, and reason text by editing the YAML — no code change required. Override path with:
+
+```bash
+export DETECTION_RULES_PATH=/path/to/detections.yaml
+```
+
+If the rules file is missing, the app falls back to the previous hardcoded detectors. `/health` reports rule load status.
 
 ### Roles (RBAC)
 
@@ -145,6 +160,7 @@ See [`.env.example`](.env.example). Important variables:
 | `SIEM_DB_PATH` | SQLite path (default `siem.db`) |
 | `SIEM_SYNC_MINUTES` | Graph lookback window (default `15`) |
 | `SIEM_SESSION_HTTPS_ONLY` | Secure cookie flag |
+| `DETECTION_RULES_PATH` | YAML rules file (default `rules/detections.yaml`) |
 | `ALERT_EMAIL_*` / `SMTP_*` | Email alerting (see above) |
 | `OPENCLAWAI_*` | Optional webhook forwarding |
 | `SIEM_SSO_*` | Optional reverse-proxy SSO/MFA headers |
@@ -236,9 +252,11 @@ See [`docs/pr-conflicts.md`](docs/pr-conflicts.md).
 ## Project layout (high level)
 
 ```
-codexsiem/          # config, db, detection, graph, notifications, routes
-templates/          # Jinja2 UI (base layout, dashboard, tenants, email, …)
+codexsiem/          # config, db, detection, rules_engine, graph, notifications, routes
+rules/              # detections.yaml (editable detection rules)
+templates/          # Jinja2 UI
 docs/               # setup guides
+tests/              # pytest (including rules engine)
 scripts/            # run/verify/repair helpers
 application.py      # FastAPI app + sync/alert pipeline
 run_server.py       # preferred launcher

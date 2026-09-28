@@ -37,7 +37,7 @@
       <div>
         <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
         <h2>Dashboard</h2>
-        <p class="subtitle">Filter by customer, group, or M365 tenancy</p>
+        <p class="subtitle">Search by date, severity, user, customer, IP, and more</p>
       </div>
       <div class="actions">
         {% if can_manage %}
@@ -58,7 +58,29 @@
     </section>
 
     <section class="panel">
+      <h3 class="panel-title">Search &amp; filters</h3>
       <form method="get" action="/" class="form-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: end;">
+        <div class="field">
+          <label>From date</label>
+          <input type="date" name="date_from" value="{{ date_from }}" />
+        </div>
+        <div class="field">
+          <label>To date</label>
+          <input type="date" name="date_to" value="{{ date_to }}" />
+        </div>
+        <div class="field">
+          <label>Severity</label>
+          <select name="severity">
+            <option value="">Any severity</option>
+            {% for s in severities %}
+            <option value="{{ s }}" {% if severity == s %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>User (UPN)</label>
+          <input type="text" name="user" value="{{ filter_user }}" placeholder="user@contoso.com" />
+        </div>
         <div class="field">
           <label>Customer</label>
           <select name="customer">
@@ -89,12 +111,24 @@
           </select>
         </div>
         <div class="field">
-          <label>Search</label>
-          <input type="text" name="q" value="{{ q }}" placeholder="User, IP, app…" />
+          <label>IP address</label>
+          <input type="text" name="ip" value="{{ ip }}" placeholder="203.0.113." />
+        </div>
+        <div class="field">
+          <label>Application</label>
+          <input type="text" name="app" value="{{ app }}" placeholder="Office 365" />
+        </div>
+        <div class="field">
+          <label>Reason</label>
+          <input type="text" name="reason" value="{{ reason }}" placeholder="impossible travel" />
+        </div>
+        <div class="field" style="grid-column: span 2;">
+          <label>Quick search</label>
+          <input type="text" name="q" value="{{ q }}" placeholder="Any text across user, IP, app, reason, tenant…" />
         </div>
         <div class="full toolbar">
-          <button class="btn primary" type="submit">Apply filters</button>
-          <a class="btn ghost" href="/">Clear</a>
+          <button class="btn primary" type="submit">Search</button>
+          <a class="btn ghost" href="/">Clear all</a>
         </div>
       </form>
     </section>
@@ -123,7 +157,7 @@
             <td>{{ row["status_error_code"] }} {{ row["status_failure_reason"] }}</td>
           </tr>
           {% else %}
-          <tr><td class="empty" colspan="11">No alerts found for the current filters.</td></tr>
+          <tr><td class="empty" colspan="11">No alerts found for the current search.</td></tr>
           {% endfor %}
         </tbody>
       </table>

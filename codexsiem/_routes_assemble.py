@@ -9,8 +9,7 @@ _PARTS = ("_routes_part1.py", "_routes_part2.py", "_routes_part3.py")
 
 
 def ensure_routes_src() -> Path:
-    if _OUT.exists() and _OUT.stat().st_size > 5000:
-        return _OUT
+    """Always rebuild from parts so route updates are picked up."""
     chunks = []
     for name in _PARTS:
         p = _DIR / name

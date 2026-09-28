@@ -27,6 +27,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 customer_name TEXT NOT NULL DEFAULT 'Unassigned',
+                customer_group TEXT NOT NULL DEFAULT '',
                 tenant_id TEXT NOT NULL UNIQUE,
                 client_id TEXT NOT NULL,
                 client_secret TEXT NOT NULL,
@@ -97,6 +98,10 @@ def init_db() -> None:
         if "customer_name" not in cols:
             conn.execute(
                 "ALTER TABLE tenants ADD COLUMN customer_name TEXT NOT NULL DEFAULT 'Unassigned'"
+            )
+        if "customer_group" not in cols:
+            conn.execute(
+                "ALTER TABLE tenants ADD COLUMN customer_group TEXT NOT NULL DEFAULT ''"
             )
 
         signins_cols = [row[1] for row in conn.execute("PRAGMA table_info(signins)").fetchall()]

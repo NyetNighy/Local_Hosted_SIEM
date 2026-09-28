@@ -1,26 +1,74 @@
 @app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, q: str = "", error: str = "", info: str = "") -> HTMLResponse:
+async def dashboard(
+    request: Request,
+    q: str = "",
+    customer: str = "",
+    group: str = "",
+    tenant: str = "",
+    error: str = "",
+    info: str = "",
+) -> HTMLResponse:
     auth_redirect = require_login(request)
     if auth_redirect:
         return auth_redirect
 
     query = q.strip()
-    with closing(db_conn()) as conn:
-        tenant_count = conn.execute("SELECT COUNT(*) FROM tenants").fetchone()[0]
-        signin_count = conn.execute("SELECT COUNT(*) FROM signins").fetchone()[0]
-        alert_count = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
+    customer_f = customer.strip()
+    group_f = group.strip()
+    tenant_f = tenant.strip()
 
-        filters = ""
+    with closing(db_conn()) as conn:
+        where_parts: List[str] = []
         params: List[Any] = []
+
+        if customer_f:
+            where_parts.append("t.customer_name = ?")
+            params.append(customer_f)
+        if group_f:
+            where_parts.append("COALESCE(t.customer_group, '') = ?")
+            params.append(group_f)
+        if tenant_f:
+            where_parts.append("s.tenant_id = ?")
+            params.append(tenant_f)
         if query:
-            filters = "WHERE s.tenant_id LIKE ? OR t.customer_name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?"
+            where_parts.append(
+                "(s.tenant_id LIKE ? OR t.customer_name LIKE ? OR COALESCE(t.customer_group, '') LIKE ? "
+                "OR t.name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?)"
+            )
             term = f"%{query}%"
-            params = [term, term, term, term, term]
+            params.extend([term, term, term, term, term, term, term])
+
+        filters = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+        tenant_count = conn.execute("SELECT COUNT(*) FROM tenants").fetchone()[0]
+        if filters:
+            signin_count = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM signins s
+                JOIN tenants t ON t.tenant_id = s.tenant_id
+                {filters}
+                """,
+                params,
+            ).fetchone()[0]
+            alert_count = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM alerts a
+                JOIN signins s ON s.graph_id = a.signins_graph_id AND s.tenant_id = a.tenant_id
+                JOIN tenants t ON t.tenant_id = s.tenant_id
+                {filters}
+                """,
+                params,
+            ).fetchone()[0]
+        else:
+            signin_count = conn.execute("SELECT COUNT(*) FROM signins").fetchone()[0]
+            alert_count = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
 
         rows = conn.execute(
             f"""
             SELECT a.created_at AS alerted_at, a.severity, a.reason,
-                   s.tenant_id, t.customer_name, s.user_principal_name, s.ip_address,
+                   s.tenant_id, t.customer_name, COALESCE(t.customer_group, '') AS customer_group,
+                   t.name AS connection_name,
+                   s.user_principal_name, s.ip_address,
                    s.app_display_name, s.created_at AS signin_time,
                    s.status_error_code, s.status_failure_reason
             FROM alerts a
@@ -33,7 +81,35 @@ async def dashboard(request: Request, q: str = "", error: str = "", info: str = 
             params,
         ).fetchall()
 
+        customers = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT customer_name FROM tenants WHERE TRIM(customer_name) <> '' ORDER BY customer_name ASC"
+            ).fetchall()
+        ]
+        groups = [
+            r[0]
+            for r in conn.execute(
+                "SELECT DISTINCT customer_group FROM tenants WHERE COALESCE(TRIM(customer_group), '') <> '' ORDER BY customer_group ASC"
+            ).fetchall()
+        ]
+        tenancies = conn.execute(
+            """
+            SELECT tenant_id, customer_name, name, COALESCE(customer_group, '') AS customer_group
+            FROM tenants
+            ORDER BY customer_name ASC, name ASC
+            """
+        ).fetchall()
+
     role = request.session.get("role", "")
+    export_qs = httpx.QueryParams({
+        k: v for k, v in {
+            "q": query,
+            "customer": customer_f,
+            "group": group_f,
+            "tenant": tenant_f,
+        }.items() if v
+    })
     try:
         return templates.TemplateResponse(
             "dashboard.html",
@@ -44,6 +120,13 @@ async def dashboard(request: Request, q: str = "", error: str = "", info: str = 
                 "alert_count": alert_count,
                 "alerts": rows,
                 "q": query,
+                "customer": customer_f,
+                "group": group_f,
+                "tenant": tenant_f,
+                "customers": customers,
+                "groups": groups,
+                "tenancies": tenancies,
+                "export_qs": str(export_qs),
                 "error": error,
                 "info": info,
                 "user": request.session.get("user", ""),
@@ -61,24 +144,47 @@ async def dashboard(request: Request, q: str = "", error: str = "", info: str = 
 
 
 @app.get("/export/alerts.csv")
-async def export_alerts_csv(request: Request, q: str = "") -> StreamingResponse:
+async def export_alerts_csv(
+    request: Request,
+    q: str = "",
+    customer: str = "",
+    group: str = "",
+    tenant: str = "",
+) -> StreamingResponse:
     auth_redirect = require_login(request)
     if auth_redirect:
-        # Not ideal for file endpoints, but keeps auth behavior consistent.
         return StreamingResponse(iter(["Unauthorized"]), status_code=401)
 
     query = q.strip()
+    customer_f = customer.strip()
+    group_f = group.strip()
+    tenant_f = tenant.strip()
+
     with closing(db_conn()) as conn:
-        filters = ""
+        where_parts: List[str] = []
         params: List[Any] = []
+        if customer_f:
+            where_parts.append("t.customer_name = ?")
+            params.append(customer_f)
+        if group_f:
+            where_parts.append("COALESCE(t.customer_group, '') = ?")
+            params.append(group_f)
+        if tenant_f:
+            where_parts.append("s.tenant_id = ?")
+            params.append(tenant_f)
         if query:
-            filters = "WHERE s.tenant_id LIKE ? OR t.customer_name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?"
+            where_parts.append(
+                "(s.tenant_id LIKE ? OR t.customer_name LIKE ? OR COALESCE(t.customer_group, '') LIKE ? "
+                "OR t.name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?)"
+            )
             term = f"%{query}%"
-            params = [term, term, term, term, term]
+            params.extend([term, term, term, term, term, term, term])
+        filters = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
         rows = conn.execute(
             f"""
-            SELECT a.created_at AS alerted_at, t.customer_name, s.tenant_id,
+            SELECT a.created_at AS alerted_at, t.customer_name, COALESCE(t.customer_group, '') AS customer_group,
+                   s.tenant_id, t.name AS connection_name,
                    s.user_principal_name, s.ip_address, s.app_display_name,
                    s.created_at AS signin_time, a.severity, a.reason,
                    s.status_error_code, s.status_failure_reason
@@ -97,7 +203,9 @@ async def export_alerts_csv(request: Request, q: str = "") -> StreamingResponse:
     writer.writerow([
         "alerted_at",
         "customer_name",
+        "customer_group",
         "tenant_id",
+        "connection_name",
         "user_principal_name",
         "ip_address",
         "app_display_name",
@@ -111,7 +219,9 @@ async def export_alerts_csv(request: Request, q: str = "") -> StreamingResponse:
         writer.writerow([
             row["alerted_at"],
             row["customer_name"],
+            row["customer_group"],
             row["tenant_id"],
+            row["connection_name"],
             row["user_principal_name"],
             row["ip_address"],
             row["app_display_name"],
@@ -143,6 +253,7 @@ async def tenant_page(request: Request) -> HTMLResponse:
             SELECT
                 name,
                 customer_name,
+                COALESCE(customer_group, '') AS customer_group,
                 tenant_id,
                 client_id,
                 client_secret_ref,
@@ -154,7 +265,7 @@ async def tenant_page(request: Request) -> HTMLResponse:
                 END AS secret_source,
                 created_at
             FROM tenants
-            ORDER BY customer_name ASC, name ASC
+            ORDER BY customer_group ASC, customer_name ASC, name ASC
             """,
             (ENV_REF_PLACEHOLDER,),
         ).fetchall()

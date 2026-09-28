@@ -4,12 +4,13 @@ A lightweight **multi-tenant Microsoft 365 SIEM** that:
 
 - Connects to multiple M365 tenancies (each with its own Entra app credentials)
 - Pulls sign-in logs from Microsoft Graph (`auditLogs/signIns`)
-- Generates alerts for suspicious sign-ins via **YAML detection rules** (failed attempts, risk, conditional access, legacy auth, high-risk countries, impossible travel, failed-login bursts)
+- Generates alerts via **YAML detection rules** (failed sign-ins, risk, conditional access, legacy auth, high-risk countries, impossible travel, failed-login bursts)
+- Uses **per-tenant sync watermarks** so re-syncs do not re-alert duplicates
 - Groups data by **customer**, **group**, and **M365 tenancy**
-- Provides a modern dark UI with sidebar navigation, dense tables, and sticky column headers
-- Supports advanced search/filters and CSV export
-- Sends optional **SMTP email alerts** (HTML + plain text) with severity gating
-- Includes role-based access control (**admin** / **manager** / **user**), audit logs, and optional SSO/MFA via reverse-proxy headers
+- Modern dark UI: sidebar nav, dense tables, sticky headers, last-sync status
+- Advanced search/filters and CSV export
+- Optional **SMTP email**, **Microsoft Teams**, and **Slack** alerts (severity-gated)
+- RBAC (**admin** / **manager** / **user**), audit logs, optional SSO/MFA via reverse-proxy headers
 
 ## Quick start
 
@@ -66,6 +67,8 @@ Filter and search alerts by:
 
 Filters combine with **AND**. Stats and **Export CSV** respect the same filters.
 
+Managers also see a **Last sync** card and a **Tenant sync status** table (status, last sync time, watermark, error).
+
 ### Customer / group / tenancy
 
 Each tenant connection can store:
@@ -75,11 +78,39 @@ Each tenant connection can store:
 - **Connection display name** — internal label (e.g. `Contoso-Prod-M365`)
 - **Tenant ID** — M365 directory ID
 
-Use **Manage Tenants** to set these. Dashboard filters and tables expose all of them.
+Use **Manage Tenants** to set these. The tenants table also shows last sync status and watermark.
+
+### Sync & watermarks
+
+- **Sync Now** pulls sign-ins for every configured tenant.
+- Default lookback: 15 minutes (`SIEM_SYNC_MINUTES`), but the effective lower bound is the **later** of that window and the tenant’s **watermark** (`last_synced_event_at` + 1 second).
+- Only **new** Graph sign-in IDs are inserted and evaluated for alerts (duplicate `graph_id` rows are skipped).
+- Alert rows are unique on `(tenant_id, signins_graph_id, reason)`.
+- Per-tenant fields: `last_sync_at`, `last_sync_status` (`ok` / `error`), `last_sync_error`, `last_synced_event_at`.
+
+### YAML detection rules
+
+Detections live in [`rules/detections.yaml`](rules/detections.yaml) and are evaluated by `codexsiem/rules_engine.py` on each **new** sign-in during sync.
+
+| Rule ID | What it detects |
+|---------|-----------------|
+| `auth.failed_signin` | Non-zero Graph error code |
+| `auth.risk_level` | Elevated `riskLevelDuringSignIn` |
+| `auth.conditional_access` | CA `failure` / `notApplied` |
+| `auth.legacy_client` | IMAP/POP/SMTP/EAS/other clients |
+| `geo.high_risk_country` | Countries in the `high_risk_countries` list |
+| `auth.failed_burst` | ≥ 5 failures for same user in 15 minutes |
+| `geo.impossible_travel` | Country change within 60 minutes |
+
+Edit the YAML to change thresholds, severity, lists, or reason text — no code deploy required:
+
+```bash
+export DETECTION_RULES_PATH=/path/to/detections.yaml
+```
+
+If the rules file is missing, the app falls back to the previous hardcoded detectors. `/health` reports rule load status.
 
 ### Email alerting
-
-When enabled, each **new** alert during sync can send a multipart email (plain text + HTML).
 
 ```bash
 export ALERT_EMAIL_ENABLED=true
@@ -98,29 +129,31 @@ export ALERT_EMAIL_MIN_SEVERITY=medium   # low | medium | high
 
 Email failures are logged and do not stop sign-in ingestion.
 
-### YAML detection rules
+### Teams & Slack webhooks
 
-Detections are defined in [`rules/detections.yaml`](rules/detections.yaml) and evaluated by `codexsiem/rules_engine.py` on each new sign-in during sync.
-
-**Bundled rules:**
-
-| Rule ID | What it detects |
-|---------|-----------------|
-| `auth.failed_signin` | Non-zero Graph error code |
-| `auth.risk_level` | Elevated `riskLevelDuringSignIn` |
-| `auth.conditional_access` | CA `failure` / `notApplied` |
-| `auth.legacy_client` | IMAP/POP/SMTP/EAS/other clients |
-| `geo.high_risk_country` | Countries in the `high_risk_countries` list |
-| `auth.failed_burst` | ≥ 5 failures for same user in 15 minutes |
-| `geo.impossible_travel` | Country change within 60 minutes |
-
-Tune thresholds, severity, country lists, and reason text by editing the YAML — no code change required. Override path with:
+Optional response channels (same payload path as email; severity-gated separately):
 
 ```bash
-export DETECTION_RULES_PATH=/path/to/detections.yaml
+export TEAMS_WEBHOOK_ENABLED=true
+export TEAMS_WEBHOOK_URL='https://outlook.office.com/webhook/...'
+
+export SLACK_WEBHOOK_ENABLED=true
+export SLACK_WEBHOOK_URL='https://hooks.slack.com/services/...'
+
+export WEBHOOK_MIN_SEVERITY=medium
+export WEBHOOK_TIMEOUT=10
 ```
 
-If the rules file is missing, the app falls back to the previous hardcoded detectors. `/health` reports rule load status.
+### Health endpoint
+
+`GET /health` returns JSON including:
+
+- overall status
+- detection rules status (`ok`, path, rule count)
+- Teams/Slack webhook readiness
+- sync summary (`ok` / `failed` / `never_synced`, oldest/newest sync times)
+
+`GET /ready` checks database connectivity.
 
 ### Roles (RBAC)
 
@@ -158,19 +191,16 @@ See [`.env.example`](.env.example). Important variables:
 | `SIEM_SESSION_SECRET` | Required in production (long random string) |
 | `SIEM_ALLOW_INSECURE` | Allow default session secret for local demos only |
 | `SIEM_DB_PATH` | SQLite path (default `siem.db`) |
-| `SIEM_SYNC_MINUTES` | Graph lookback window (default `15`) |
+| `SIEM_SYNC_MINUTES` | Graph lookback floor in minutes (default `15`) |
 | `SIEM_SESSION_HTTPS_ONLY` | Secure cookie flag |
 | `DETECTION_RULES_PATH` | YAML rules file (default `rules/detections.yaml`) |
-| `ALERT_EMAIL_*` / `SMTP_*` | Email alerting (see above) |
-| `OPENCLAWAI_*` | Optional webhook forwarding |
+| `ALERT_EMAIL_*` / `SMTP_*` | Email alerting |
+| `TEAMS_WEBHOOK_*` | Microsoft Teams incoming webhook |
+| `SLACK_WEBHOOK_*` | Slack incoming webhook |
+| `WEBHOOK_MIN_SEVERITY` | Min severity for Teams/Slack (default `medium`) |
+| `OPENCLAWAI_*` | Optional generic webhook forwarding |
 | `SIEM_SSO_*` | Optional reverse-proxy SSO/MFA headers |
 | `SIEM_GITHUB_REPO` | Optional update-check target |
-
-## Sync
-
-- **Sync Now** on the dashboard fetches recent sign-ins for all configured tenants.
-- Default lookback: 15 minutes (`SIEM_SYNC_MINUTES`).
-- Data stored in SQLite.
 
 ## CSV export
 
@@ -211,7 +241,7 @@ export SIEM_SSO_REQUIRE_MFA=true
 
 ## Troubleshooting
 
-### `ModuleNotFoundError: No module named 'itsdangerous'`
+### `ModuleNotFoundError: No module named 'itsdangerous'` (or `yaml`)
 
 ```bash
 source .venv/bin/activate
@@ -254,7 +284,7 @@ See [`docs/pr-conflicts.md`](docs/pr-conflicts.md).
 ```
 codexsiem/          # config, db, detection, rules_engine, graph, notifications, routes
 rules/              # detections.yaml (editable detection rules)
-templates/          # Jinja2 UI
+templates/          # Jinja2 UI (dashboard, tenants, email, …)
 docs/               # setup guides
 tests/              # pytest (including rules engine)
 scripts/            # run/verify/repair helpers

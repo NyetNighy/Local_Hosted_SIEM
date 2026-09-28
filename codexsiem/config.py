@@ -27,6 +27,7 @@ GITHUB_REPO = os.getenv("SIEM_GITHUB_REPO", "").strip()
 GITHUB_BRANCH = os.getenv("SIEM_GITHUB_BRANCH", "main").strip() or "main"
 
 ALERT_EMAIL_ENABLED = os.getenv("ALERT_EMAIL_ENABLED", "false").lower() == "true"
+ALERT_EMAIL_MIN_SEVERITY = os.getenv("ALERT_EMAIL_MIN_SEVERITY", "low").strip().lower() or "low"
 SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "").strip()
@@ -34,6 +35,7 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", "").strip()
 SMTP_TO = [x.strip() for x in os.getenv("SMTP_TO", "").split(",") if x.strip()]
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 
 SSO_ENABLED = os.getenv("SIEM_SSO_ENABLED", "false").lower() == "true"
 SSO_USER_HEADER = os.getenv("SIEM_SSO_USER_HEADER", "X-Auth-Request-User")

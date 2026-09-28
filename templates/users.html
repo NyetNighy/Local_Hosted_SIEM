@@ -1,69 +1,86 @@
 {% extends "base.html" %}
 {% block title %}Users · CodexSIEM{% endblock %}
 {% block body %}
-<div class="shell">
-  <header class="topbar">
-    <div class="brand">
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
       <div class="brand-mark">CS</div>
       <div>
-        <h1>Users</h1>
-        <p class="subtitle">Signed in as <strong>{{ user }}</strong> · {{ role }}</p>
+        <h1>CodexSIEM</h1>
+        <div class="tag">M365 SIEM</div>
       </div>
     </div>
-    <nav class="nav">
-      <a class="btn ghost" href="/">Dashboard</a>
-      <form method="post" action="/logout" style="margin:0"><button class="btn ghost" type="submit">Logout</button></form>
-    </nav>
-  </header>
+    <div class="nav-section">Monitor</div>
+    <a class="nav-link" href="/"><span class="ico">◈</span> Dashboard</a>
+    <div class="nav-section">Operations</div>
+    <a class="nav-link" href="/tenants"><span class="ico">◎</span> Tenants</a>
+    <div class="nav-section">Admin</div>
+    <a class="nav-link active" href="/users"><span class="ico">◉</span> Users</a>
+    <a class="nav-link" href="/audit"><span class="ico">▦</span> Audit</a>
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <div class="name">{{ user }}</div>
+        <div class="role">{{ role }}</div>
+      </div>
+      <form method="post" action="/logout" style="margin:0">
+        <button class="btn ghost block" type="submit">Logout</button>
+      </form>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
+        <h2>Users</h2>
+        <p class="subtitle">Role-based access control</p>
+      </div>
+    </div>
 
-  <div class="info-box">
-    <strong>Role permissions</strong>
-    <ul>
-      <li><strong>admin</strong> — full access including user and audit management</li>
-      <li><strong>manager</strong> — manage tenants, trigger sync, view dashboard</li>
-      <li><strong>user</strong> — read-only dashboard access</li>
-    </ul>
-    <p style="margin:10px 0 0"><strong>Security:</strong> passwords are hashed with PBKDF2 and never stored in plaintext.</p>
-  </div>
+    <div class="info-box">
+      <strong>Roles:</strong> admin (full) · manager (tenants + sync) · user (read-only).
+      Passwords are hashed with PBKDF2.
+    </div>
 
-  <section class="panel">
-    <h2 class="panel-title">Create or update user</h2>
-    <form method="post" action="/users" class="form-grid" style="grid-template-columns: 1fr 1fr 1fr;">
-      <div class="field">
-        <label>Username</label>
-        <input name="username" placeholder="Username" required />
-      </div>
-      <div class="field">
-        <label>Role</label>
-        <select name="role" required>
-          {% for r in allowed_roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
-        </select>
-      </div>
-      <div class="field">
-        <label>Password</label>
-        <input type="password" name="password" placeholder="Password" required />
-      </div>
-      <div class="full">
-        <button class="btn primary" type="submit">Save user</button>
-      </div>
-    </form>
-  </section>
+    <section class="panel">
+      <h3 class="panel-title">Create or update user</h3>
+      <form method="post" action="/users" class="form-grid" style="grid-template-columns: 1fr 1fr 1fr;">
+        <div class="field">
+          <label>Username</label>
+          <input name="username" placeholder="Username" required />
+        </div>
+        <div class="field">
+          <label>Role</label>
+          <select name="role" required>
+            {% for r in allowed_roles %}<option value="{{ r }}">{{ r }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" name="password" placeholder="Password" required />
+        </div>
+        <div class="full">
+          <button class="btn primary" type="submit">Save user</button>
+        </div>
+      </form>
+    </section>
 
-  <section class="table-wrap">
-    <table>
-      <thead><tr><th>Username</th><th>Role</th><th>Created</th></tr></thead>
-      <tbody>
-        {% for u in users %}
-        <tr>
-          <td>{{ u['username'] }}</td>
-          <td><span class="badge badge-low">{{ u['role'] }}</span></td>
-          <td>{{ u['created_at'] }}</td>
-        </tr>
-        {% else %}
-        <tr><td class="empty" colspan="3">No users found.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </section>
+    <section class="table-wrap">
+      <table>
+        <thead><tr><th>Username</th><th>Role</th><th>Created</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u['username'] }}</td>
+            <td><span class="badge badge-low">{{ u['role'] }}</span></td>
+            <td>{{ u['created_at'] }}</td>
+          </tr>
+          {% else %}
+          <tr><td class="empty" colspan="3">No users found.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  </main>
 </div>
 {% endblock %}

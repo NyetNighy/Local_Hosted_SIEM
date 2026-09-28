@@ -3,6 +3,7 @@ async def create_tenant(
     request: Request,
     name: str = Form(...),
     customer_name: str = Form(...),
+    customer_group: str = Form(""),
     tenant_id: str = Form(...),
     client_id: str = Form(...),
     client_secret_ref: str = Form(""),
@@ -18,18 +19,38 @@ async def create_tenant(
         return RedirectResponse(url="/tenants", status_code=303)
 
     secret_to_store = secret_value or ENV_REF_PLACEHOLDER
+    group_val = customer_group.strip()
+    cust = customer_name.strip() or "Unassigned"
+    tid = tenant_id.strip()
+    cid = client_id.strip()
+    conn_name = name.strip()
 
     with closing(db_conn()) as conn:
         conn.execute(
             """
-            INSERT OR REPLACE INTO tenants (name, customer_name, tenant_id, client_id, client_secret, client_secret_ref, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO tenants (name, customer_name, customer_group, tenant_id, client_id, client_secret, client_secret_ref, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(tenant_id) DO UPDATE SET
+                name=excluded.name,
+                customer_name=excluded.customer_name,
+                customer_group=excluded.customer_group,
+                client_id=excluded.client_id,
+                client_secret=excluded.client_secret,
+                client_secret_ref=excluded.client_secret_ref
             """,
-            (name.strip(), customer_name.strip() or "Unassigned", tenant_id.strip(), client_id.strip(), secret_to_store, secret_ref, utc_now_iso()),
+            (conn_name, cust, group_val, tid, cid, secret_to_store, secret_ref, utc_now_iso()),
         )
         conn.commit()
 
-    audit_log(request.session.get("user", "unknown"), request.session.get("role", "unknown"), "tenant_upsert", "success", target=tenant_id, source_ip=request.client.host if request.client else "", details={"customer_name": customer_name.strip() or "Unassigned"})
+    audit_log(
+        request.session.get("user", "unknown"),
+        request.session.get("role", "unknown"),
+        "tenant_upsert",
+        "success",
+        target=tid,
+        source_ip=request.client.host if request.client else "",
+        details={"customer_name": cust, "customer_group": group_val},
+    )
     return RedirectResponse(url="/tenants", status_code=303)
 
 

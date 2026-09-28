@@ -1,72 +1,209 @@
 # CodexSIEM
 
-A lightweight **multi-tenant Microsoft 365 SIEM starter** that:
+A lightweight **multi-tenant Microsoft 365 SIEM** that:
 
-- Connects to multiple M365 tenancies (each with its own Entra app credentials).
-- Pulls sign-in logs from Microsoft Graph (`auditLogs/signIns`).
-- Generates alerts for suspicious sign-ins (failed attempts, risky sign-ins, conditional-access issues).
-- Displays customer, tenancy, user, and sign-in details in a dashboard.
-- Supports dashboard search by customer, tenant, user, IP, or app, plus CSV export.
-- Supports role-based access control with **admin**, **manager**, and **user** roles.
+- Connects to multiple M365 tenancies (each with its own Entra app credentials)
+- Pulls sign-in logs from Microsoft Graph (`auditLogs/signIns`)
+- Generates alerts for suspicious sign-ins (failed attempts, risk, conditional access, legacy auth, high-risk countries, impossible travel)
+- Groups data by **customer**, **group**, and **M365 tenancy**
+- Provides a modern dark UI with sidebar navigation, dense tables, and sticky column headers
+- Supports advanced search/filters and CSV export
+- Sends optional **SMTP email alerts** (HTML + plain text) with severity gating
+- Includes role-based access control (**admin** / **manager** / **user**), audit logs, and optional SSO/MFA via reverse-proxy headers
 
 ## Quick start
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+
+export SIEM_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+# Local demo only (skip if you set a real secret above):
+# export SIEM_ALLOW_INSECURE=true
+
 python run_server.py --host 0.0.0.0 --port 8000
-# Recommended entrypoint for runtime resilience
-# Use `main:app` as the operational ASGI entrypoint (recommended for resilience).
-python scripts/run_server.py --host 0.0.0.0 --port 8000
-uvicorn main:app --host 0.0.0.0 --port 8000
-uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-Open in browser: `http://localhost:8000` (not `0.0.0.0`).
+Open: **http://localhost:8000** (not `0.0.0.0`).
 
+On first run with no users, you are redirected to `/setup` to create the initial **Admin** account.
 
-### Local login/session note
+Alternative entrypoints:
 
-If you run without HTTPS (typical local dev), keep session secure-cookie mode disabled:
+```bash
+python scripts/run_server.py --host 0.0.0.0 --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
-- `SIEM_SESSION_HTTPS_ONLY=false` (default)
+### Session cookies
 
-If you deploy behind HTTPS, enable it:
+| Environment | Setting |
+|-------------|---------|
+| Local HTTP | `SIEM_SESSION_HTTPS_ONLY=false` (default) |
+| HTTPS / reverse proxy | `SIEM_SESSION_HTTPS_ONLY=true` |
 
-- `SIEM_SESSION_HTTPS_ONLY=true`
+Secure-only cookies on plain HTTP can cause login loops.
 
-Using secure-only cookies on plain HTTP can cause login/setup loops or blank/unauthenticated behavior after redirects.
+## Features
 
-## Microsoft 365 app setup (tenant side)
+### Dashboard & search
 
-For a direct tenant-side Entra app registration walkthrough, see:
+Filter and search alerts by:
 
-- [`docs/m365-app-setup.md`](docs/m365-app-setup.md)
-Open: `http://localhost:8000`
+| Filter | Description |
+|--------|-------------|
+| **From / To date** | Alert time range |
+| **Severity** | low / medium / high |
+| **User (UPN)** | Sign-in user principal name |
+| **Customer** | Customer name on the tenant connection |
+| **Group** | Customer group / business unit |
+| **M365 tenancy** | Exact tenant ID |
+| **IP address** | Partial match |
+| **Application** | App display name |
+| **Reason** | Alert reason text |
+| **Quick search** | Free text across user, IP, app, reason, tenant, customer |
 
-## Pull request conflict workflow
+Filters combine with **AND**. Stats and **Export CSV** respect the same filters.
 
-If GitHub reports merge conflicts on your PR, follow:
+### Customer / group / tenancy
 
-- [`docs/pr-conflicts.md`](docs/pr-conflicts.md)
+Each tenant connection can store:
 
-## Troubleshooting startup: `ModuleNotFoundError: No module named itsdangerous`
+- **Customer name** — client/account (e.g. `Contoso Ltd`)
+- **Customer group** — optional grouping (e.g. `EMEA`, `MSP-A`)
+- **Connection display name** — internal label (e.g. `Contoso-Prod-M365`)
+- **Tenant ID** — M365 directory ID
 
-If Uvicorn fails at startup with `No module named 'itsdangerous'`, your virtual environment is missing dependencies.
+Use **Manage Tenants** to set these. Dashboard filters and tables expose all of them.
 
-Run:
+### Email alerting
+
+When enabled, each **new** alert during sync can send a multipart email (plain text + HTML).
+
+```bash
+export ALERT_EMAIL_ENABLED=true
+export SMTP_HOST=smtp.office365.com
+export SMTP_PORT=587
+export SMTP_USE_TLS=true
+export SMTP_USER=siem-alerts@yourdomain.com
+export SMTP_PASSWORD='...'
+export SMTP_FROM=siem-alerts@yourdomain.com
+export SMTP_TO=soc@yourdomain.com,oncall@yourdomain.com
+export ALERT_EMAIL_MIN_SEVERITY=medium   # low | medium | high
+```
+
+- Admin UI: **Email** → `/settings/email` (status + **Send test email**)
+- Full guide: [`docs/email-alerting.md`](docs/email-alerting.md)
+
+Email failures are logged and do not stop sign-in ingestion.
+
+### Detection rules
+
+- Failed sign-ins
+- Sign-in risk levels
+- Conditional access failures / not applied
+- Legacy auth (IMAP/POP/SMTP/EAS/other clients)
+- High-risk country codes (`RU`, `KP`, `IR`)
+- Simple impossible-travel heuristic (country change within 60 minutes)
+
+### Roles (RBAC)
+
+| Role | Access |
+|------|--------|
+| **admin** | Dashboard, sync, tenants, users, audit, email settings |
+| **manager** | Dashboard, sync, tenants |
+| **user** | Dashboard / search (read-only) |
+
+### Audit logging
+
+Structured records for login, SSO, logout, tenant/user changes, sync, and email test. View at `/audit` (admin).
+
+## Microsoft 365 tenant setup
+
+1. Register an app in each tenant and grant **application** permissions:
+   - `AuditLog.Read.All`
+   - `Directory.Read.All` (optional enrichment)
+2. Grant admin consent.
+3. Store **Tenant ID**, **Client ID**, and a **client secret** (preferably in env vars).
+4. In the UI: **Tenants** → add connection; set `client_secret_ref` to the env var name (e.g. `TENANT_A_CLIENT_SECRET`).
+
+Detailed walkthrough: [`docs/m365-app-setup.md`](docs/m365-app-setup.md) · [`docs/m365-setup.md`](docs/m365-setup.md)
+
+```bash
+export TENANT_A_CLIENT_SECRET='super-secret-value'
+```
+
+## Environment reference
+
+See [`.env.example`](.env.example). Important variables:
+
+| Variable | Purpose |
+|----------|---------|
+| `SIEM_SESSION_SECRET` | Required in production (long random string) |
+| `SIEM_ALLOW_INSECURE` | Allow default session secret for local demos only |
+| `SIEM_DB_PATH` | SQLite path (default `siem.db`) |
+| `SIEM_SYNC_MINUTES` | Graph lookback window (default `15`) |
+| `SIEM_SESSION_HTTPS_ONLY` | Secure cookie flag |
+| `ALERT_EMAIL_*` / `SMTP_*` | Email alerting (see above) |
+| `OPENCLAWAI_*` | Optional webhook forwarding |
+| `SIEM_SSO_*` | Optional reverse-proxy SSO/MFA headers |
+| `SIEM_GITHUB_REPO` | Optional update-check target |
+
+## Sync
+
+- **Sync Now** on the dashboard fetches recent sign-ins for all configured tenants.
+- Default lookback: 15 minutes (`SIEM_SYNC_MINUTES`).
+- Data stored in SQLite.
+
+## CSV export
+
+**Export CSV** downloads the current filtered alert set as `codexsiem_alerts.csv`.
+
+Endpoint: `/export/alerts.csv` (supports the same query parameters as the dashboard).
+
+## Optional integrations
+
+### OpenClawAI webhook
+
+```bash
+export OPENCLAWAI_ENABLED=true
+export OPENCLAWAI_URL=https://your-openclawai.example/api/alerts
+export OPENCLAWAI_API_KEY=...   # optional
+```
+
+See [`docs/openclawai-integration.md`](docs/openclawai-integration.md).
+
+### SSO / MFA via reverse proxy
+
+```bash
+export SIEM_SSO_ENABLED=true
+export SIEM_SSO_USER_HEADER=X-Auth-Request-User
+export SIEM_SSO_ROLE_HEADER=X-Auth-Request-Role
+export SIEM_SSO_MFA_HEADER=X-Auth-Request-Amr
+export SIEM_SSO_REQUIRE_MFA=true
+```
+
+## Production notes
+
+1. Put the app behind a reverse proxy with TLS (Nginx, Traefik, Caddy, or cloud LB).
+2. Expose only HTTPS; do not expose plain HTTP directly.
+3. Restrict source IPs where possible (office/VPN).
+4. Use a strong `SIEM_SESSION_SECRET` and rotate it periodically.
+5. Keep tenant client secrets in env vars or a secret manager (not in the DB as plaintext for new tenants).
+6. External access guide: [`docs/external-access.md`](docs/external-access.md).
+
+## Troubleshooting
+
+### `ModuleNotFoundError: No module named 'itsdangerous'`
 
 ```bash
 source .venv/bin/activate
-python -m pip install --upgrade pip
 pip install -r requirements.txt
-# Recommended entrypoint for runtime resilience
-# Use `main:app` as the operational ASGI entrypoint (recommended for resilience).
 python scripts/verify_runtime.py
 ```
 
-If that still fails, recreate the venv cleanly:
+If needed, recreate the venv:
 
 ```bash
 deactivate || true
@@ -74,250 +211,39 @@ rm -rf .venv
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-# Recommended entrypoint for runtime resilience
-# Use `main:app` as the operational ASGI entrypoint (recommended for resilience).
-python scripts/verify_runtime.py
 ```
 
-Then retry:
+### Startup / entrypoint issues
 
-```bash
-python run_server.py --host 0.0.0.0 --port 8000
-python scripts/run_server.py --host 0.0.0.0 --port 8000
-```
-
-If you still want to call Uvicorn directly, run `python scripts/verify_runtime.py` immediately before `uvicorn main:app` to detect stale or malformed local files first.
-
-If you see a syntax error coming from `scripts/run_server.py`, prefer the root wrapper instead:
+Prefer the root wrapper:
 
 ```bash
 python run_server.py --host 0.0.0.0 --port 8000
 ```
 
-If preflight reports indentation/syntax corruption in `app.py` or `application.py`, you can let the launcher attempt automatic git recovery:
+Auto-recover from git if files look corrupted:
 
 ```bash
 python run_server.py --auto-recover --host 0.0.0.0 --port 8000
-```
-
-If git restore is not practical, you can rewrite wrapper files to known-good templates:
-
-```bash
-python scripts/repair_entrypoints.py
-```
-
-If `application.py` is also broken, include a git restore attempt in the same command:
-
-```bash
+# or
 python scripts/repair_entrypoints.py --include-application
-uvicorn main:app --host 0.0.0.0 --port 8000
-uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-## First startup admin setup
+### PR merge conflicts
 
-If no users exist, the app now redirects to `/setup` and asks for the initial **Admin** account password.
+See [`docs/pr-conflicts.md`](docs/pr-conflicts.md).
 
-- Username is fixed as `Admin` for first setup.
-- After creation, you are signed in automatically.
-- You can then create additional admin/manager/user accounts from **Manage Users**.
+## Project layout (high level)
 
-## Role-based access (RBAC)
-
-- **admin**: full access (dashboard, sync, tenant management, user management)
-- **manager**: manage access (dashboard, sync, tenant management)
-- **user**: read-only access (dashboard/search only)
-
-The app stores platform users in a `users` table. On first startup, it can bootstrap one admin account from env vars.
-
-## Bootstrap the first admin
-
-Set these environment variables before first start:
-
-- `SIEM_ADMIN_USERNAME` (example: `siem-admin`)
-- `SIEM_ADMIN_SALT` (hex salt)
-- `SIEM_ADMIN_PASSWORD_HASH` (PBKDF2-HMAC-SHA256 digest hex)
-- `SIEM_SESSION_SECRET` (long random string)
-
-Generate salt/hash from a password:
-
-```bash
-python - <<'PY'
-from auth import hash_password
-salt, digest = hash_password("your-strong-password")
-print("SIEM_ADMIN_SALT=", salt)
-print("SIEM_ADMIN_PASSWORD_HASH=", digest)
-PY
+```
+codexsiem/          # config, db, detection, graph, notifications, routes
+templates/          # Jinja2 UI (base layout, dashboard, tenants, email, …)
+docs/               # setup guides
+scripts/            # run/verify/repair helpers
+application.py      # FastAPI app + sync/alert pipeline
+run_server.py       # preferred launcher
 ```
 
-After login as admin, use **Manage Users** to add manager/user accounts. Passwords are entered as plaintext in the UI but hashed server-side before storage.
+## License
 
-
-
-## CSV export
-
-From the dashboard, use **Export CSV** to download current (or filtered) alerts as `codexsiem_alerts.csv`.
-
-- Endpoint: `/export/alerts.csv`
-- Supports search filter via query string: `/export/alerts.csv?q=contoso`
-
-## Alert email notifications
-
-CodexSIEM can send email notifications for generated alerts through SMTP.
-
-Set environment variables:
-
-- `ALERT_EMAIL_ENABLED=true`
-- `SMTP_HOST=smtp.example.com`
-- `SMTP_PORT=587`
-- `SMTP_USER=...` (optional)
-- `SMTP_PASSWORD=...` (optional)
-- `SMTP_FROM=siem@example.com`
-- `SMTP_TO=secops@example.com,soclead@example.com`
-- `SMTP_USE_TLS=true`
-
-Behavior:
-
-- Each alert can trigger a multipart email (plain text + HTML) with customer/tenant/user/IP/reason context.
-- Email delivery is best-effort and non-blocking (ingestion continues if SMTP is unavailable).
-
-## Customer-to-connection mapping
-
-Each tenant connection can now be tied to a **Customer Name**.
-
-- Use **Customer Name** for the client/account (for example, `Contoso Ltd`).
-- Use **Connection Display Name** for your internal connection label (for example, `Contoso-Prod-M365`).
-- Dashboard alerts include customer name and search supports customer-based filtering.
-
-## Securing passwords and Microsoft 365 app secrets
-
-This build hardens sensitive data handling:
-
-- User passwords are hashed with PBKDF2-HMAC-SHA256 (salted, non-plaintext storage).
-- Tenant client secrets should be stored in environment variables (or an external secret manager) and referenced by variable name in **Manage Tenants**.
-- Tenant table stores secret references (e.g., `TENANT_A_CLIENT_SECRET`), not the raw secret values for new/updated tenants.
-
-Example environment variables:
-
-```bash
-export TENANT_A_CLIENT_SECRET='super-secret-value'
-export TENANT_B_CLIENT_SECRET='another-secret-value'
-```
-
-In the tenant form, set `client_secret_ref` to `TENANT_A_CLIENT_SECRET` etc.
-
-## MFA/SSO integration (optional)
-
-You can integrate SSO/MFA using an identity-aware reverse proxy (for example Azure AD + oauth2-proxy) that injects trusted headers.
-
-Environment variables:
-
-- `SIEM_SSO_ENABLED=true`
-- `SIEM_SSO_USER_HEADER=X-Auth-Request-User`
-- `SIEM_SSO_ROLE_HEADER=X-Auth-Request-Role` (`admin`/`manager`/`user`)
-- `SIEM_SSO_MFA_HEADER=X-Auth-Request-Amr`
-- `SIEM_SSO_REQUIRE_MFA=true`
-
-Behavior:
-
-- If SSO is enabled and headers are present, CodexSIEM creates a session from those claims.
-- If MFA is required and header does not include `mfa`, access is denied and recorded in audit logs.
-
-## Stronger audit logging
-
-CodexSIEM now writes structured security audit records for:
-
-- login success/failure
-- SSO login success/denied
-- logout
-- tenant create/update
-- user create/update
-- sync operations (including partial failures)
-
-Admin users can view logs at **Audit Logs** in the dashboard (`/audit`).
-
-## Hardened detection logic
-
-Alerting rules now include:
-
-- failed sign-ins
-- sign-in risk levels
-- conditional access failures/not applied
-- legacy auth protocol usage (IMAP/POP/SMTP/EAS/other clients)
-- monitored high-risk country codes (`RU`, `KP`, `IR`)
-- simple impossible-travel heuristic (country change within 60 minutes)
-
-## Optional OpenClawAI integration
-
-You can forward generated SIEM alerts to an OpenClawAI system via webhook/API endpoint.
-
-Set environment variables:
-
-- `OPENCLAWAI_ENABLED=true`
-- `OPENCLAWAI_URL=https://your-openclawai.example/api/alerts`
-- `OPENCLAWAI_API_KEY=...` (optional bearer token)
-- `OPENCLAWAI_TIMEOUT=10` (seconds, optional)
-
-Behavior:
-
-- Each generated alert is posted as JSON to your OpenClawAI endpoint.
-- If OpenClawAI is unavailable, SIEM ingestion continues (non-blocking).
-
-## Microsoft 365 tenant setup guide
-
-For full step-by-step instructions on the Microsoft 365 / Entra ID side (app registration, Graph permissions, consent, and secret creation), see:
-
-- [`docs/m365-setup.md`](docs/m365-setup.md)
-
-## External access with subdomain + SSL certificate
-
-To expose CodexSIEM beyond localhost safely, follow:
-
-- [`docs/external-access.md`](docs/external-access.md)
-
-This covers DNS subdomain setup, reverse proxy, certificate issuance (Let's Encrypt), and firewall hardening.
-
-## Authentication and secure external access
-
-For secure access from external networks:
-
-1. Put the app behind a reverse proxy with TLS (Nginx, Traefik, Caddy, or cloud LB).
-2. Expose only HTTPS (443), do not expose plain HTTP directly.
-3. Restrict source IPs where possible (office/VPN ranges).
-4. Use strong passwords and rotate `SIEM_SESSION_SECRET` periodically.
-5. Store tenant client secrets in a secret manager for production (not plain env vars).
-
-## Required permissions in each M365 tenant
-
-Register an app in each tenant and grant **application permissions**:
-
-- `AuditLog.Read.All`
-- `Directory.Read.All` (optional enrichment)
-
-Then grant admin consent and store:
-
-- Tenant ID
-- Client ID
-- Client Secret
-
-Use **Manage Tenants** in the UI to add each tenancy.
-
-## Sync behavior
-
-- Click **Sync Now** to fetch recent sign-ins.
-- Default lookback interval is 15 minutes (`SIEM_SYNC_MINUTES` env var).
-- Data is stored in SQLite (`siem.db` by default; override with `SIEM_DB_PATH`).
-
-## Search
-
-The dashboard search box filters alerts by:
-
-- Customer name
-- Tenant ID
-- User principal name
-- IP address
-- Application name
-
-## Notes
-
-- This is a starter implementation; production deployment should add MFA/SSO integration, stronger audit logs, and hardened detection logic.
+See [LICENSE](LICENSE).

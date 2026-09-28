@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -24,6 +24,9 @@ from auth import get_admin_credentials, hash_password, verify_password
 from secret_utils import ENV_REF_PLACEHOLDER, resolve_client_secret
 from siem_core import alert_reasons
 from startup_checks import run_startup_template_self_check
+
+from codexsiem.config import validate_runtime_config
+from codexsiem.detection import severity_for_reason
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -153,7 +156,8 @@ def init_db() -> None:
                 signins_graph_id TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 reason TEXT NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                UNIQUE(tenant_id, signins_graph_id, reason)
             );
 
             CREATE TABLE IF NOT EXISTS users (
@@ -192,6 +196,16 @@ def init_db() -> None:
             conn.execute("ALTER TABLE signins ADD COLUMN location_country TEXT")
         if "location_city" not in signins_cols:
             conn.execute("ALTER TABLE signins ADD COLUMN location_city TEXT")
+
+        try:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_alerts_unique
+                ON alerts (tenant_id, signins_graph_id, reason)
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
 
         conn.commit()
 
@@ -458,7 +472,7 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
                         signin.get("conditionalAccessStatus"),
                         location.get("countryOrRegion"),
                         location.get("city"),
-                        str(signin),
+                        json.dumps(signin, ensure_ascii=False, default=str),
                     ),
                 )
                 ingested += 1
@@ -469,15 +483,18 @@ def persist_signins_and_alerts(tenant_id: str, signins: List[Dict[str, Any]]) ->
             reasons.extend(add_impossible_travel_reason(conn, tenant_id, signin))
 
             for reason in reasons:
-                severity = "high" if any(x in reason for x in ["Failed", "Risk", "impossible travel"]) else "medium"
+                severity = severity_for_reason(reason)
                 created_at = utc_now_iso()
-                conn.execute(
-                    """
-                    INSERT INTO alerts (tenant_id, signins_graph_id, severity, reason, created_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (tenant_id, graph_id, severity, reason, created_at),
-                )
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO alerts (tenant_id, signins_graph_id, severity, reason, created_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (tenant_id, graph_id, severity, reason, created_at),
+                    )
+                except sqlite3.IntegrityError:
+                    continue
                 payload = {
                     "source": "codexsiem",
                     "tenant_id": tenant_id,
@@ -531,512 +548,22 @@ async def sync_all_tenants() -> Dict[str, Any]:
 
 @app.on_event("startup")
 async def startup() -> None:
+    validate_runtime_config()
     startup_template_self_check()
     init_db()
     bootstrap_admin_user()
 
 
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    trace = traceback.format_exc()
+@app.get("/health")
+async def health() -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/ready")
+async def ready() -> JSONResponse:
     try:
-        audit_log(
-            actor=request.session.get("user", "anonymous") if hasattr(request, "session") else "anonymous",
-            actor_role=request.session.get("role", "unknown") if hasattr(request, "session") else "unknown",
-            action="unhandled_exception",
-            outcome="error",
-            source_ip=request.client.host if request.client else "",
-            details={"error": str(exc), "trace": trace[-4000:]},
-        )
-    except Exception:
-        pass
-
-    accept = (request.headers.get("accept") or "").lower()
-    if "text/html" in accept:
-        return templates.TemplateResponse(
-            "error.html",
-            {"request": request, "message": "An internal error occurred. Check audit logs."},
-            status_code=500,
-        )
-
-    return RedirectResponse(url="/?error=Internal+server+error", status_code=303)
-
-
-@app.get("/setup", response_class=HTMLResponse)
-async def setup_page(request: Request, error: str = "") -> HTMLResponse:
-    if has_users():
-        return RedirectResponse(url="/login", status_code=303)
-    return templates.TemplateResponse("setup.html", {"request": request, "error": error})
-
-
-@app.post("/setup")
-async def setup_first_admin(
-    request: Request,
-    password: str = Form(...),
-    confirm_password: str = Form(...),
-) -> RedirectResponse:
-    if has_users():
-        return RedirectResponse(url="/login", status_code=303)
-
-    pwd = password.strip()
-    cpwd = confirm_password.strip()
-    if not pwd or pwd != cpwd:
-        return RedirectResponse(url="/setup?error=Passwords+do+not+match", status_code=303)
-
-    salt_hex, digest_hex = hash_password(pwd)
-    with closing(db_conn()) as conn:
-        conn.execute(
-            """
-            INSERT INTO users (username, role, password_salt, password_hash, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            ("Admin", ROLE_ADMIN, salt_hex, digest_hex, utc_now_iso()),
-        )
-        conn.commit()
-
-    request.session["user"] = "Admin"
-    request.session["role"] = ROLE_ADMIN
-    audit_log("Admin", ROLE_ADMIN, "first_admin_setup", "success", source_ip=request.client.host if request.client else "")
-    return RedirectResponse(url="/", status_code=303)
-
-
-@app.get("/login", response_class=HTMLResponse)
-async def login_page(request: Request, error: str = "") -> HTMLResponse:
-    if not has_users():
-        return RedirectResponse(url="/setup", status_code=303)
-    return templates.TemplateResponse("login.html", {"request": request, "error": error})
-
-
-@app.post("/login")
-async def login(request: Request, username: str = Form(...), password: str = Form(...)) -> RedirectResponse:
-    if not has_users():
-        return RedirectResponse(url="/setup", status_code=303)
-
-    ip = request.client.host if request.client else ""
-    with closing(db_conn()) as conn:
-        row = conn.execute(
-            "SELECT username, role, password_salt, password_hash FROM users WHERE username = ?",
-            (username.strip(),),
-        ).fetchone()
-
-    if not row:
-        audit_log(username.strip(), "unknown", "login", "failed", source_ip=ip)
-        return RedirectResponse(url="/login?error=Invalid+credentials", status_code=303)
-
-    if verify_password(password, row["password_salt"], row["password_hash"]):
-        request.session["user"] = row["username"]
-        request.session["role"] = row["role"]
-        audit_log(row["username"], row["role"], "login", "success", source_ip=ip)
-        return RedirectResponse(url="/", status_code=303)
-
-    audit_log(row["username"], row["role"], "login", "failed", source_ip=ip)
-    return RedirectResponse(url="/login?error=Invalid+credentials", status_code=303)
-
-
-@app.post("/logout")
-async def logout(request: Request) -> RedirectResponse:
-    audit_log(request.session.get("user", "unknown"), request.session.get("role", "unknown"), "logout", "success", source_ip=request.client.host if request.client else "")
-    request.session.clear()
-    return RedirectResponse(url="/login", status_code=303)
-
-
-def _dashboard_fallback_html(request: Request, rows: List[Any], tenant_count: int, signin_count: int, alert_count: int, query: str, error: str, info: str = "") -> str:
-    safe_rows = []
-    for row in rows:
-        safe_rows.append(
-            "<tr>"
-            f"<td>{html.escape(str(row['alerted_at'] or ''))}</td>"
-            f"<td>{html.escape(str(row['customer_name'] or ''))}</td>"
-            f"<td>{html.escape(str(row['tenant_id'] or ''))}</td>"
-            f"<td>{html.escape(str(row['user_principal_name'] or ''))}</td>"
-            f"<td>{html.escape(str(row['ip_address'] or ''))}</td>"
-            f"<td>{html.escape(str(row['app_display_name'] or ''))}</td>"
-            f"<td>{html.escape(str(row['severity'] or ''))}</td>"
-            f"<td>{html.escape(str(row['reason'] or ''))}</td>"
-            "</tr>"
-        )
-
-    rows_html = "".join(safe_rows) or '<tr><td colspan="8">No alerts found for the current filter.</td></tr>'
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>CodexSIEM Dashboard</title></head><body>"
-        "<h1>Microsoft 365 Multi-Tenant SIEM</h1>"
-        "<p><strong>Template warning:</strong> dashboard template failed to render. Showing fallback view.</p>"
-        f"<p>Signed in as <strong>{html.escape(str(request.session.get('user', '')))}</strong> ({html.escape(str(request.session.get('role', '')))})</p>"
-        + (f"<p style='color:#a00'>{html.escape(error)}</p>" if error else "")
-        + (f"<p style='color:#0a5'>{html.escape(info)}</p>" if info else "")
-        + f"<p>Tenants: {tenant_count} | Sign-ins: {signin_count} | Alerts: {alert_count}</p>"
-        + "<form method='get' action='/'><input name='q' value='" + html.escape(query) + "' placeholder='Search' /> <button type='submit'>Search</button></form>"
-        + "<table border='1' cellpadding='6' cellspacing='0'><thead><tr><th>Alert Time</th><th>Customer</th><th>Tenant</th><th>User</th><th>IP</th><th>Application</th><th>Severity</th><th>Reason</th></tr></thead><tbody>"
-        + rows_html
-        + "</tbody></table><p><a href='/tenants'>Connect M365 Tenant</a> | <a href='/users'>Manage Users</a> | <a href='/audit'>Audit Logs</a></p><form method='post' action='/check-updates'><button type='submit'>Check GitHub Updates</button></form></body></html>"
-    )
-
-
-def _tenants_fallback_html(request: Request, tenants: List[Any]) -> str:
-    body_rows = []
-    for t in tenants:
-        body_rows.append(
-            "<tr>"
-            f"<td>{html.escape(str(t['customer_name'] or ''))}</td>"
-            f"<td>{html.escape(str(t['name'] or ''))}</td>"
-            f"<td>{html.escape(str(t['tenant_id'] or ''))}</td>"
-            f"<td>{html.escape(str(t['client_id'] or ''))}</td>"
-            f"<td>{html.escape(str(t['secret_source'] or ''))}</td>"
-            f"<td>{html.escape(str(t['client_secret_ref'] or ''))}</td>"
-            f"<td>{html.escape(str(t['created_at'] or ''))}</td>"
-            "</tr>"
-        )
-    rows_html = "".join(body_rows) or '<tr><td colspan="6">No tenants configured yet.</td></tr>'
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Tenants</title></head><body>"
-        "<h1>Manage M365 Tenants</h1>"
-        "<p><strong>Template warning:</strong> tenants template failed to render. Showing fallback view.</p>"
-        f"<p>Signed in as <strong>{html.escape(str(request.session.get('user', '')))}</strong> ({html.escape(str(request.session.get('role', '')))})</p>"
-        "<p>You can still connect a Microsoft 365 tenant using this fallback form.</p>"
-        "<form method='post' action='/tenants' style='display:grid;gap:8px;max-width:620px;margin-bottom:12px;'>"
-        "<input name='customer_name' placeholder='Customer Name (e.g. Contoso Ltd)' required />"
-        "<input name='name' placeholder='Connection Display Name' required />"
-        "<input name='tenant_id' placeholder='Tenant ID (GUID)' required />"
-        "<input name='client_id' placeholder='App Client ID' required />"
-        "<input name='client_secret' placeholder='Client Secret Value or Secret ID (stored in DB)' />"
-        "<div>or</div>"
-        "<input name='client_secret_ref' placeholder='Env var name holding secret (e.g. TENANT_A_CLIENT_SECRET)' />"
-        "<button type='submit'>Save Tenant</button>"
-        "</form>"
-        + "<table border='1' cellpadding='6' cellspacing='0'><thead><tr><th>Customer</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th><th>Secret Source</th><th>Added</th></tr></thead><tbody>"
-        "<input name='client_secret_ref' placeholder='Env var name holding secret (e.g. TENANT_A_CLIENT_SECRET)' required />"
-        "<button type='submit'>Save Tenant</button>"
-        "</form>"
-        + "<table border='1' cellpadding='6' cellspacing='0'><thead><tr><th>Customer</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th><th>Secret Env Var</th><th>Added</th></tr></thead><tbody>"
-        + rows_html
-        + "</tbody></table><p><a href='/'>Back to Dashboard</a></p></body></html>"
-    )
-
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard(request: Request, q: str = "", error: str = "", info: str = "") -> HTMLResponse:
-    auth_redirect = require_login(request)
-    if auth_redirect:
-        return auth_redirect
-
-    query = q.strip()
-    with closing(db_conn()) as conn:
-        tenant_count = conn.execute("SELECT COUNT(*) FROM tenants").fetchone()[0]
-        signin_count = conn.execute("SELECT COUNT(*) FROM signins").fetchone()[0]
-        alert_count = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0]
-
-        filters = ""
-        params: List[Any] = []
-        if query:
-            filters = "WHERE s.tenant_id LIKE ? OR t.customer_name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?"
-            term = f"%{query}%"
-            params = [term, term, term, term, term]
-
-        rows = conn.execute(
-            f"""
-            SELECT a.created_at AS alerted_at, a.severity, a.reason,
-                   s.tenant_id, t.customer_name, s.user_principal_name, s.ip_address,
-                   s.app_display_name, s.created_at AS signin_time,
-                   s.status_error_code, s.status_failure_reason
-            FROM alerts a
-            JOIN signins s ON s.graph_id = a.signins_graph_id AND s.tenant_id = a.tenant_id
-            JOIN tenants t ON t.tenant_id = s.tenant_id
-            {filters}
-            ORDER BY a.created_at DESC
-            LIMIT 200
-            """,
-            params,
-        ).fetchall()
-
-    role = request.session.get("role", "")
-    try:
-        return templates.TemplateResponse(
-            "dashboard.html",
-            {
-                "request": request,
-                "tenant_count": tenant_count,
-                "signin_count": signin_count,
-                "alert_count": alert_count,
-                "alerts": rows,
-                "q": query,
-                "error": error,
-                "info": info,
-                "user": request.session.get("user", ""),
-                "role": role,
-                "can_manage": user_can_manage(role),
-                "is_admin": user_is_admin(role),
-            },
-        )
-    except Exception:
-        LOGGER.exception("Failed to render dashboard.html; returning fallback dashboard HTML")
-        return HTMLResponse(
-            _dashboard_fallback_html(request, rows, tenant_count, signin_count, alert_count, query, error, info),
-            status_code=200,
-        )
-
-
-@app.get("/export/alerts.csv")
-async def export_alerts_csv(request: Request, q: str = "") -> StreamingResponse:
-    auth_redirect = require_login(request)
-    if auth_redirect:
-        # Not ideal for file endpoints, but keeps auth behavior consistent.
-        return StreamingResponse(iter(["Unauthorized"]), status_code=401)
-
-    query = q.strip()
-    with closing(db_conn()) as conn:
-        filters = ""
-        params: List[Any] = []
-        if query:
-            filters = "WHERE s.tenant_id LIKE ? OR t.customer_name LIKE ? OR s.user_principal_name LIKE ? OR s.ip_address LIKE ? OR s.app_display_name LIKE ?"
-            term = f"%{query}%"
-            params = [term, term, term, term, term]
-
-        rows = conn.execute(
-            f"""
-            SELECT a.created_at AS alerted_at, t.customer_name, s.tenant_id,
-                   s.user_principal_name, s.ip_address, s.app_display_name,
-                   s.created_at AS signin_time, a.severity, a.reason,
-                   s.status_error_code, s.status_failure_reason
-            FROM alerts a
-            JOIN signins s ON s.graph_id = a.signins_graph_id AND s.tenant_id = a.tenant_id
-            JOIN tenants t ON t.tenant_id = s.tenant_id
-            {filters}
-            ORDER BY a.created_at DESC
-            LIMIT 5000
-            """,
-            params,
-        ).fetchall()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-        "alerted_at",
-        "customer_name",
-        "tenant_id",
-        "user_principal_name",
-        "ip_address",
-        "app_display_name",
-        "signin_time",
-        "severity",
-        "reason",
-        "status_error_code",
-        "status_failure_reason",
-    ])
-    for row in rows:
-        writer.writerow([
-            row["alerted_at"],
-            row["customer_name"],
-            row["tenant_id"],
-            row["user_principal_name"],
-            row["ip_address"],
-            row["app_display_name"],
-            row["signin_time"],
-            row["severity"],
-            row["reason"],
-            row["status_error_code"],
-            row["status_failure_reason"],
-        ])
-
-    csv_data = output.getvalue()
-    output.close()
-
-    filename = "codexsiem_alerts.csv"
-    headers = {"Content-Disposition": f"attachment; filename={filename}"}
-    return StreamingResponse(iter([csv_data]), media_type="text/csv", headers=headers)
-
-
-
-@app.get("/tenants", response_class=HTMLResponse)
-async def tenant_page(request: Request) -> HTMLResponse:
-    auth_redirect = require_manage_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    with closing(db_conn()) as conn:
-        tenants = conn.execute(
-            """
-            SELECT
-                name,
-                customer_name,
-                tenant_id,
-                client_id,
-                client_secret_ref,
-                client_secret,
-                CASE
-                    WHEN COALESCE(TRIM(client_secret_ref), '') <> '' THEN 'Env Var: ' || client_secret_ref
-                    WHEN COALESCE(TRIM(client_secret), '') <> '' AND client_secret <> ? THEN 'Stored in DB'
-                    ELSE 'Not configured'
-                END AS secret_source,
-                created_at
-            FROM tenants
-            ORDER BY customer_name ASC, name ASC
-            """,
-            (ENV_REF_PLACEHOLDER,),
-        ).fetchall()
-    try:
-        return templates.TemplateResponse(
-            "tenants.html",
-            {
-                "request": request,
-                "tenants": tenants,
-                "user": request.session.get("user", ""),
-                "role": request.session.get("role", ""),
-            },
-        )
-    except Exception:
-        LOGGER.exception("Failed to render tenants.html; returning fallback tenants HTML")
-        return HTMLResponse(_tenants_fallback_html(request, tenants), status_code=200)
-
-
-@app.post("/tenants")
-async def create_tenant(
-    request: Request,
-    name: str = Form(...),
-    customer_name: str = Form(...),
-    tenant_id: str = Form(...),
-    client_id: str = Form(...),
-    client_secret_ref: str = Form(""),
-    client_secret: str = Form(""),
-) -> RedirectResponse:
-    auth_redirect = require_manage_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    secret_ref = client_secret_ref.strip()
-    secret_value = client_secret.strip()
-    if not secret_ref and not secret_value:
-        return RedirectResponse(url="/tenants", status_code=303)
-
-    secret_to_store = secret_value or ENV_REF_PLACEHOLDER
-
-    with closing(db_conn()) as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO tenants (name, customer_name, tenant_id, client_id, client_secret, client_secret_ref, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (name.strip(), customer_name.strip() or "Unassigned", tenant_id.strip(), client_id.strip(), secret_to_store, secret_ref, utc_now_iso()),
-        )
-        conn.commit()
-
-    audit_log(request.session.get("user", "unknown"), request.session.get("role", "unknown"), "tenant_upsert", "success", target=tenant_id, source_ip=request.client.host if request.client else "", details={"customer_name": customer_name.strip() or "Unassigned"})
-    return RedirectResponse(url="/tenants", status_code=303)
-
-
-@app.post("/sync")
-async def trigger_sync(request: Request) -> RedirectResponse:
-    auth_redirect = require_manage_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    results = await sync_all_tenants()
-    audit_log(request.session.get("user", "unknown"), request.session.get("role", "unknown"), "sync", "success" if not results["errors"] else "partial", source_ip=request.client.host if request.client else "", details=results)
-    return RedirectResponse(url="/", status_code=303)
-
-
-@app.post("/check-updates")
-async def check_updates(request: Request) -> RedirectResponse:
-    auth_redirect = require_login(request)
-    if auth_redirect:
-        return auth_redirect
-
-    status = check_github_update_status()
-    audit_log(
-        request.session.get("user", "unknown"),
-        request.session.get("role", "unknown"),
-        "check_updates",
-        "success",
-        source_ip=request.client.host if request.client else "",
-        details={"status": status},
-    )
-    return RedirectResponse(url='/?info=' + httpx.QueryParams({'v': status})['v'], status_code=303)
-
-
-
-
-@app.get("/users", response_class=HTMLResponse)
-async def users_page(request: Request) -> HTMLResponse:
-    auth_redirect = require_admin_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    with closing(db_conn()) as conn:
-        users = conn.execute("SELECT username, role, created_at FROM users ORDER BY created_at ASC").fetchall()
-
-    return templates.TemplateResponse(
-        "users.html",
-        {
-            "request": request,
-            "users": users,
-            "user": request.session.get("user", ""),
-            "role": request.session.get("role", ""),
-            "allowed_roles": sorted(ALLOWED_ROLES),
-        },
-    )
-
-
-@app.post("/users")
-async def create_or_update_user(
-    request: Request,
-    username: str = Form(...),
-    role: str = Form(...),
-    password: str = Form(...),
-) -> RedirectResponse:
-    auth_redirect = require_admin_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    normalized_role = role.strip().lower()
-    if normalized_role not in ALLOWED_ROLES:
-        return RedirectResponse(url="/users", status_code=303)
-
-    uname = username.strip()
-    pwd = password.strip()
-    if not uname or not pwd:
-        return RedirectResponse(url="/users", status_code=303)
-
-    salt_hex, digest_hex = hash_password(pwd)
-
-    with closing(db_conn()) as conn:
-        conn.execute(
-            """
-            INSERT INTO users (username, role, password_salt, password_hash, created_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(username) DO UPDATE SET
-                role=excluded.role,
-                password_salt=excluded.password_salt,
-                password_hash=excluded.password_hash
-            """,
-            (uname, normalized_role, salt_hex, digest_hex, utc_now_iso()),
-        )
-        conn.commit()
-
-    audit_log(request.session.get("user", "unknown"), request.session.get("role", "unknown"), "user_upsert", "success", target=uname, source_ip=request.client.host if request.client else "", details={"assigned_role": normalized_role})
-    return RedirectResponse(url="/users", status_code=303)
-
-
-@app.get("/audit", response_class=HTMLResponse)
-async def audit_page(request: Request) -> HTMLResponse:
-    auth_redirect = require_admin_access(request)
-    if auth_redirect:
-        return auth_redirect
-
-    with closing(db_conn()) as conn:
-        logs = conn.execute(
-            """
-            SELECT event_time, actor, actor_role, action, target, outcome, source_ip, details
-            FROM audit_logs
-            ORDER BY id DESC
-            LIMIT 300
-            """
-        ).fetchall()
-
-    return templates.TemplateResponse(
-        "audit.html",
-        {
-            "request": request,
-            "logs": logs,
-            "user": request.session.get("user", ""),
-            "role": request.session.get("role", ""),
-        },
-    )
+        with closing(db_conn()) as conn:
+            conn.execute("SELECT 1").fetchone()
+        return JSONResponse({"status": "ready"})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "not_ready", "error": str(exc)}, status_code=503)

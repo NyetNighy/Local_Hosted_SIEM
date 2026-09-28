@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Email alerts · CodexSIEM{% endblock %}
+{% block body %}
+<div class="sidebar-backdrop" id="sidebar-backdrop" onclick="toggleSidebar()"></div>
+<div class="app">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-mark">CS</div>
+      <div>
+        <h1>CodexSIEM</h1>
+        <div class="tag">M365 SIEM</div>
+      </div>
+    </div>
+    <div class="nav-section">Monitor</div>
+    <a class="nav-link" href="/"><span class="ico">◈</span> Dashboard</a>
+    <div class="nav-section">Operations</div>
+    <a class="nav-link" href="/tenants"><span class="ico">◎</span> Tenants</a>
+    <div class="nav-section">Admin</div>
+    <a class="nav-link" href="/users"><span class="ico">◉</span> Users</a>
+    <a class="nav-link" href="/audit"><span class="ico">▦</span> Audit</a>
+    <a class="nav-link active" href="/settings/email"><span class="ico">✉</span> Email</a>
+    <div class="sidebar-foot">
+      <div class="user-chip">
+        <div class="name">{{ user }}</div>
+        <div class="role">{{ role }}</div>
+      </div>
+      <form method="post" action="/logout" style="margin:0">
+        <button class="btn ghost block" type="submit">Logout</button>
+      </form>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
+        <h2>Email alerting</h2>
+        <p class="subtitle">SMTP configuration status and test send</p>
+      </div>
+    </div>
+
+    {% if result == 'ok' %}
+    <div class="alert alert-success">{{ detail or 'Test email sent.' }}</div>
+    {% elif result == 'error' %}
+    <div class="alert alert-error">{{ detail or 'Test email failed.' }}</div>
+    {% endif %}
+
+    <section class="panel">
+      <h3 class="panel-title">Status</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+        <tr><td style="padding:6px 0;color:var(--muted);width:160px;">Enabled</td><td>{{ 'yes' if status.enabled else 'no' }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">Ready</td><td>{{ 'yes' if status.ready else 'no' }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">Detail</td><td>{{ status.reason }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">SMTP host</td><td>{{ status.host or '—' }}{% if status.port %}:{{ status.port }}{% endif %}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">Recipients</td><td>{{ status.recipients }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">Min severity</td><td>{{ status.min_severity }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">TLS / SSL</td><td>TLS={{ status.use_tls }} · SSL={{ status.use_ssl }}</td></tr>
+        <tr><td style="padding:6px 0;color:var(--muted);">Auth</td><td>{{ 'configured' if status.has_auth else 'none' }}</td></tr>
+      </table>
+      <div class="toolbar" style="margin-top:12px;">
+        <form method="post" action="/settings/email/test" style="margin:0">
+          <button class="btn primary" type="submit" {% if not status.ready %}disabled{% endif %}>Send test email</button>
+        </form>
+      </div>
+    </section>
+
+    <div class="info-box">
+      <strong>Configure via environment variables</strong> (restart required after changes):
+      <ul>
+        <li><code>ALERT_EMAIL_ENABLED=true</code></li>
+        <li><code>SMTP_HOST</code>, <code>SMTP_PORT</code> (587 STARTTLS or 465 SSL)</li>
+        <li><code>SMTP_FROM</code>, <code>SMTP_TO</code> (comma-separated)</li>
+        <li><code>SMTP_USER</code> / <code>SMTP_PASSWORD</code> if your provider requires auth</li>
+        <li><code>SMTP_USE_TLS=true</code> or <code>SMTP_USE_SSL=true</code> for port 465</li>
+        <li><code>ALERT_EMAIL_MIN_SEVERITY=low|medium|high</code> — only email alerts at or above this level</li>
+      </ul>
+      See <code>docs/email-alerting.md</code> for provider examples (Office 365, Gmail, SendGrid).
+    </div>
+  </main>
+</div>
+{% endblock %}

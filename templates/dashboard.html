@@ -37,14 +37,14 @@
       <div>
         <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
         <h2>Dashboard</h2>
-        <p class="subtitle">Multi-tenant Microsoft 365 alerts</p>
+        <p class="subtitle">Filter by customer, group, or M365 tenancy</p>
       </div>
       <div class="actions">
         {% if can_manage %}
         <form method="post" action="/sync" style="margin:0"><button class="btn success" type="submit">Sync Now</button></form>
         <form method="post" action="/check-updates" style="margin:0"><button class="btn ghost" type="submit">Updates</button></form>
         {% endif %}
-        <a class="btn ghost" href="/export/alerts.csv?q={{ q }}">Export CSV</a>
+        <a class="btn ghost" href="/export/alerts.csv{% if export_qs %}?{{ export_qs }}{% endif %}">Export CSV</a>
       </div>
     </div>
 
@@ -58,9 +58,44 @@
     </section>
 
     <section class="panel">
-      <form class="search-form" method="get" action="/">
-        <input type="text" name="q" value="{{ q }}" placeholder="Search customer, tenant, user, IP, or app" />
-        <button class="btn primary" type="submit">Search</button>
+      <form method="get" action="/" class="form-grid" style="grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; align-items: end;">
+        <div class="field">
+          <label>Customer</label>
+          <select name="customer">
+            <option value="">All customers</option>
+            {% for c in customers %}
+            <option value="{{ c }}" {% if customer == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Group</label>
+          <select name="group">
+            <option value="">All groups</option>
+            {% for g in groups %}
+            <option value="{{ g }}" {% if group == g %}selected{% endif %}>{{ g }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>M365 tenancy</label>
+          <select name="tenant">
+            <option value="">All tenancies</option>
+            {% for t in tenancies %}
+            <option value="{{ t['tenant_id'] }}" {% if tenant == t['tenant_id'] %}selected{% endif %}>
+              {{ t['customer_name'] }} · {{ t['name'] }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Search</label>
+          <input type="text" name="q" value="{{ q }}" placeholder="User, IP, app…" />
+        </div>
+        <div class="full toolbar">
+          <button class="btn primary" type="submit">Apply filters</button>
+          <a class="btn ghost" href="/">Clear</a>
+        </div>
       </form>
     </section>
 
@@ -68,7 +103,7 @@
       <table>
         <thead>
           <tr>
-            <th>Alert Time</th><th>Customer</th><th>Tenant</th><th>User</th>
+            <th>Alert Time</th><th>Customer</th><th>Group</th><th>Tenant</th><th>User</th>
             <th>IP</th><th>App</th><th>Sign-in</th><th>Severity</th><th>Reason</th><th>Error</th>
           </tr>
         </thead>
@@ -77,7 +112,8 @@
           <tr>
             <td>{{ row["alerted_at"] }}</td>
             <td>{{ row["customer_name"] }}</td>
-            <td><code>{{ row["tenant_id"] }}</code></td>
+            <td>{{ row["customer_group"] or "—" }}</td>
+            <td><code title="{{ row['connection_name'] }}">{{ row["tenant_id"] }}</code></td>
             <td>{{ row["user_principal_name"] }}</td>
             <td>{{ row["ip_address"] }}</td>
             <td>{{ row["app_display_name"] }}</td>
@@ -87,7 +123,7 @@
             <td>{{ row["status_error_code"] }} {{ row["status_failure_reason"] }}</td>
           </tr>
           {% else %}
-          <tr><td class="empty" colspan="10">No alerts found for the current filter.</td></tr>
+          <tr><td class="empty" colspan="11">No alerts found for the current filters.</td></tr>
           {% endfor %}
         </tbody>
       </table>

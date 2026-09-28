@@ -35,7 +35,7 @@
       <div>
         <button type="button" class="menu-toggle" onclick="toggleSidebar()">☰ Menu</button>
         <h2>Tenants</h2>
-        <p class="subtitle">Connect Microsoft 365 tenancies</p>
+        <p class="subtitle">Connect Microsoft 365 tenancies · assign customer &amp; group</p>
       </div>
       <div class="actions">
         <article class="stat-card" style="padding:8px 14px;margin:0">
@@ -46,9 +46,8 @@
     </div>
 
     <div class="info-box">
-      <strong>Secret configuration:</strong>
-      paste a Client Secret Value directly, or provide an environment variable name.
-      If both are provided, the direct secret is used.
+      <strong>Customer / group:</strong> use these to segment the dashboard.
+      <strong>Secret:</strong> paste a Client Secret Value, or an environment variable name (direct secret wins if both are set).
     </div>
 
     <section class="panel">
@@ -57,6 +56,11 @@
         <div class="field">
           <label>Customer name</label>
           <input name="customer_name" placeholder="e.g. Contoso Ltd" required />
+        </div>
+        <div class="field">
+          <label>Group (optional)</label>
+          <input name="customer_group" placeholder="e.g. Enterprise, SMB, Region-EU" />
+          <div class="hint">Used to filter alerts by portfolio / segment</div>
         </div>
         <div class="field">
           <label>Connection name</label>
@@ -73,12 +77,10 @@
         <div class="field">
           <label>Client secret value</label>
           <input name="client_secret" type="password" placeholder="Optional direct secret" />
-          <div class="hint">Stored in the local database</div>
         </div>
         <div class="field">
           <label>Or env var name</label>
           <input name="client_secret_ref" placeholder="e.g. TENANT_A_CLIENT_SECRET" />
-          <div class="hint">Env var holding the secret</div>
         </div>
         <div class="full toolbar">
           <button class="btn success" type="submit">Save tenant</button>
@@ -91,7 +93,7 @@
       <table>
         <thead>
           <tr>
-            <th>Customer</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th>
+            <th>Customer</th><th>Group</th><th>Connection</th><th>Tenant ID</th><th>Client ID</th>
             <th>Secret source</th><th>Env var</th><th>Added</th>
           </tr>
         </thead>
@@ -99,6 +101,7 @@
           {% for t in tenants %}
           <tr>
             <td>{{ t['customer_name'] }}</td>
+            <td>{{ t['customer_group'] or "—" }}</td>
             <td>{{ t['name'] }}</td>
             <td><code>{{ t['tenant_id'] }}</code></td>
             <td><code>{{ t['client_id'] }}</code></td>
@@ -107,7 +110,7 @@
             <td>{{ t.get('created_at', 'N/A') }}</td>
           </tr>
           {% else %}
-          <tr><td class="empty" colspan="7">No tenants configured yet.</td></tr>
+          <tr><td class="empty" colspan="8">No tenants configured yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -1,0 +1,114 @@
+# CodexSIEM detection rules (v1)
+# Docs: see README "YAML detection rules"
+version: 1
+
+defaults:
+  severity: medium
+  enabled: true
+  notify: true
+
+lists:
+  high_risk_countries:
+    - RU
+    - KP
+    - IR
+  legacy_clients:
+    - imap4
+    - pop3
+    - smtp
+    - exchange activesync
+    - other clients
+
+rules:
+  - id: auth.failed_signin
+    name: Failed sign-in
+    severity: high
+    group: authentication
+    tags: [auth, failure]
+    mitre: [T1110]
+    match:
+      all:
+        - field: status.errorCode
+          op: exists
+        - field: status.errorCode
+          op: ne
+          value: 0
+    reason: "Failed sign-in (error code {{ status.errorCode }})"
+
+  - id: auth.risk_level
+    name: Elevated sign-in risk
+    severity: high
+    group: identity_protection
+    tags: [risk]
+    mitre: [T1078]
+    match:
+      field: riskLevelDuringSignIn
+      op: in
+      value: [low, medium, high]
+    reason: "Risk level during sign-in: {{ riskLevelDuringSignIn }}"
+
+  - id: auth.conditional_access
+    name: Conditional access failure or not applied
+    severity: medium
+    group: conditional_access
+    tags: [ca]
+    match:
+      field: conditionalAccessStatus
+      op: in
+      value: [failure, notApplied]
+    reason: "Conditional access status: {{ conditionalAccessStatus }}"
+
+  - id: auth.legacy_client
+    name: Legacy authentication client
+    severity: medium
+    group: authentication
+    tags: [legacy]
+    mitre: [T1078.004]
+    match:
+      field: clientAppUsed
+      op: in_list
+      list: legacy_clients
+    reason: "Legacy authentication client used: {{ clientAppUsed }}"
+
+  - id: geo.high_risk_country
+    name: Sign-in from high-risk country
+    severity: high
+    group: geography
+    tags: [geo]
+    match:
+      field: location.countryOrRegion
+      op: in_list
+      list: high_risk_countries
+    reason: "Sign-in from monitored high-risk country: {{ location.countryOrRegion }}"
+
+  - id: auth.failed_burst
+    name: Multiple failed sign-ins for same user
+    severity: high
+    group: authentication
+    tags: [auth, brute_force]
+    mitre: [T1110]
+    correlate:
+      window_minutes: 15
+      threshold: 5
+      group_by: [tenant_id, userPrincipalName]
+      where:
+        field: status.errorCode
+        op: ne
+        value: 0
+    reason: "{{ correlate.count }} failed sign-ins for {{ userPrincipalName }} within {{ correlate.window_minutes }} minutes"
+
+  - id: geo.impossible_travel
+    name: Possible impossible travel
+    severity: high
+    group: geography
+    tags: [geo, travel]
+    mitre: [T1078]
+    correlate:
+      type: impossible_travel
+      window_minutes: 60
+      threshold: 1
+      group_by: [tenant_id, userPrincipalName]
+      fields:
+        country: location.countryOrRegion
+        time: createdDateTime
+    reason: "Possible impossible travel: user moved from {{ correlate.from_country }} to {{ location.countryOrRegion }} within {{ correlate.window_minutes }} minutes"

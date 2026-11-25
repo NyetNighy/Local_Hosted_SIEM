@@ -18,7 +18,7 @@ async def create_tenant(
     if not secret_ref and not secret_value:
         return RedirectResponse(url="/tenants", status_code=303)
 
-    secret_to_store = secret_value or ENV_REF_PLACEHOLDER
+    secret_to_store = _hash_secret(secret_value)
     group_val = customer_group.strip()
     cust = customer_name.strip() or "Unassigned"
     tid = tenant_id.strip()

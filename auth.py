@@ -6,7 +6,7 @@ from typing import Tuple
 
 
 def _iter_count() -> int:
-    return int(os.getenv("SIEM_PBKDF2_ITERATIONS", "210000"))
+    return int(os.getenv("SIEM_PBKDF2_ITERATIONS", "600000"))
 
 
 def hash_password(password: str, salt: bytes | None = None) -> Tuple[str, str]:

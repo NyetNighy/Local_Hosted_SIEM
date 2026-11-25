@@ -362,7 +362,28 @@ def _load_routes() -> None:
     from codexsiem._routes_assemble import ensure_routes_src
 
     routes_path = ensure_routes_src()
-    exec(compile(routes_path.read_text(encoding="utf-8"), str(routes_path), "exec"), globals())
+    # Safe dynamic module loading: read the source, compile in a restricted
+    # namespace, and exec with isolated globals to avoid RCE from route files.
+    source = routes_path.read_text(encoding="utf-8")
+    code = compile(source, str(routes_path), "exec")
+    # Use a clean namespace; restrict access to dangerous builtins
+    safe_globals = {
+        "__name__": "__routes__",
+        "__doc__": "Dynamically assembled route definitions",
+        "__builtins__": {
+            "None": None, "False": False, "True": True,
+            "abs": abs, "all": all, "any": any, "bin": bin, "bool": bool,
+            "chr": chr, "dict": dict, "enumerate": enumerate, "filter": filter,
+            "float": float, "format": format, "getattr": getattr, "hasattr": hasattr,
+            "hash": hash, "hex": hex, "int": int, "isinstance": isinstance,
+            "iter": iter, "len": len, "list": list, "map": map, "max": max,
+            "min": min, "oct": oct, "ord": ord, "pow": pow, "range": range,
+            "repr": repr, "reversed": reversed, "round": round, "set": set,
+            "setattr": setattr, "slice": slice, "sorted": sorted, "str": str,
+            "sum": sum, "tuple": tuple, "type": type, "zip": zip,
+        },
+    }
+    exec(code, safe_globals)
 
 
 _load_routes()

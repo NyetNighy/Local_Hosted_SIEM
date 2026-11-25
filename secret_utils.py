@@ -7,19 +7,28 @@ ENV_REF_PLACEHOLDER = "__env_ref_required__"
 
 
 def _hash_secret(secret: str, salt_hex: str = "") -> str:
-    """Hash a secret using SHA-256 for storage at rest."""
+    """Hash a secret using SHA-256 for storage at rest.
+
+    Format: hex(salt) + hex(digest) = 128 hex chars total
+    """
     salt = bytes.fromhex(salt_hex) if salt_hex else hashlib.sha256(os.urandom(16)).digest()
     digest = hashlib.sha256(salt + secret.encode("utf-8")).digest()
-    return (salt_hex and (salt_hex + digest.hex())) or digest.hex()
+    return salt.hex() + digest.hex()
 
 
 def _verify_secret(secret: str, stored: str) -> bool:
     """Verify a stored secret against the provided secret."""
     stored_bytes = bytes.fromhex(stored)
-    stored_salt = stored_bytes[:-32]
-    stored_digest = stored_bytes[-32:]
+    if len(stored_bytes) == 32:
+        # No salt prefix - entire value is the digest
+        stored_salt = b""
+        stored_digest = stored_bytes
+    else:
+        # Salt + digest (64 hex chars = 32 bytes salt + 32 bytes digest)
+        stored_salt = stored_bytes[:-32]
+        stored_digest = stored_bytes[-32:]
     new_digest = hashlib.sha256(stored_salt + secret.encode("utf-8")).digest()
-    return hmac.compare_digest(stored_digest, new_digest)
+    return hmac.compare_digest(new_digest, stored_digest)
 
 
 def resolve_client_secret(tenant_row: Mapping[str, str]) -> Optional[str]:

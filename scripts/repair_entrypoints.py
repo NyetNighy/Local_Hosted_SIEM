@@ -1,42 +1,52 @@
-"""Repair CodexSIEM startup entrypoints from known-good local templates."""
-
-from __future__ import annotations
+# repair_entrypoints.py
+#
+# Helper script for CodexSIEM / enterprise-launcher to repair entrypoint
+# files when git operations (merge, rebase, checkout) leave them damaged.
 
 import argparse
-import subprocess
+import shutil
+import sys
 from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE_ROOT = ROOT / "scripts" / "repair_templates"
+ROOT = Path(__file__).resolve().parent
 
 TEMPLATES = {
-    "app.py": "app.py",
-    "main.py": "main.py",
-    "run_server.py": "run_server.py",
-    "startup_launcher.py": "startup_launcher.py",
-    "scripts/run_server.py": "scripts_run_server.py",
+    "app.py": "app.py.template",
+    "application.py": "application.py.template",
 }
 
 
 def _load_template(template_name: str) -> str:
-    template_path = TEMPLATE_ROOT / template_name
-    if not template_path.exists():
-        raise FileNotFoundError(f"Missing repair template: {template_path}")
+    """Load a template from the template directory."""
+    template_path = ROOT / "templates" / template_name
     return template_path.read_text(encoding="utf-8")
 
 
 def _restore_application_from_git() -> int:
-    result = subprocess.run(("git", "checkout", "--", "application.py"), cwd=ROOT)
-    if result.returncode == 0:
-        print("Restored application.py from git checkout")
+    """Restore application.py from git checkout."""
+    app_py = ROOT / "application.py"
+    if not app_py.exists():
+        print("application.py not found in the repository.")
         return 0
-    print("Failed to restore application.py from git. Please repair it manually.", flush=True)
-    return 1
+
+    # Run git checkout for application.py
+    import subprocess
+    result = subprocess.run(
+        ["git", "checkout", "--", "application.py"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        print("Restored application.py from git")
+        return 0
+    else:
+        print(f"Failed to checkout application.py: {result.stderr}")
+        return 1
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Repair CodexSIEM startup wrappers.")
+    parser = argparse.ArgumentParser(description="Repair CodexSIEM entrypoint files.")
     parser.add_argument(
         "--include-application",
         action="store_true",
@@ -44,9 +54,8 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    for relative_path, template_name in TEMPLATES.items():
+    for relative_path, content in TEMPLATES.items():
         path = ROOT / relative_path
-        content = _load_template(template_name)
         path.write_text(content, encoding="utf-8")
         print(f"Repaired {relative_path}")
 
